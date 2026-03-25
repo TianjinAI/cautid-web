@@ -14,7 +14,7 @@ const router = useRouter()
 
 // Form data
 const totalCash = ref('')
-const additionalCash = ref('')  // NEW: Additional cash to invest
+const demandDeposit = ref('')  // 活期存款 - cash on hand
 const housingExpense = ref('')
 const foodExpense = ref('')
 const otherExpense = ref('')
@@ -62,9 +62,8 @@ const newDeposit = ref({
   maturityDate: ''
 })
 
-// Deposit type options for existing portfolio
+// Deposit type options for existing portfolio (excluding 活期存款 - handled separately)
 const depositTypeOptions = [
-  { value: '活期存款', label: '活期存款', defaultRate: 0.10 },
   { value: '3个月定期', label: '3个月定期', defaultRate: 0.70 },
   { value: '6个月定期', label: '6个月定期', defaultRate: 0.95 },
   { value: '1年定期', label: '1年定期', defaultRate: 1.15 },
@@ -75,44 +74,46 @@ const depositTypeOptions = [
 
 // Computed for existing portfolio
 const existingPortfolioTotal = computed(() => {
-  return existingPortfolio.value.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
+  // Sum of all time deposits (excluding 活期存款 as it's separate)
+  return existingPortfolio.value
+    .filter(d => d.type !== '活期存款')
+    .reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
 })
 
 const totalCashComputed = computed(() => {
-  // 存款总额 = 现有存款 + 追加新资金
-  return existingPortfolioTotal.value + (parseFloat(additionalCash.value) || 0)
+  // 资金总额 = 活期存款 + 定期存款合计
+  return (parseFloat(demandDeposit.value) || 0) + existingPortfolioTotal.value
 })
 
 const netNewCash = computed(() => {
-  // 可用于新建计划 = 追加新资金 (user explicitly wants to invest this)
-  return parseFloat(additionalCash.value) || 0
+  // 可用于新建计划 = 活期存款 - 应急金 (what's available for immediate allocation)
+  const demand = parseFloat(demandDeposit.value) || 0
+  const emergency = parseFloat(emergencyFund.value) || 5000
+  return Math.max(0, demand - emergency)
 })
 
 const existingDemandDeposit = computed(() => {
-  return existingPortfolio.value.find(d => d.type === '活期存款')
+  // Return the manual demand deposit input as an object
+  const amount = parseFloat(demandDeposit.value) || 0
+  if (amount <= 0) return null
+  return {
+    type: '活期存款',
+    amount: amount,
+    interestRate: 0.10,
+    isManual: true
+  }
 })
 
 const liquidityWarning = computed(() => {
-  if (!showResult.value || existingPortfolio.value.length === 0) return null
+  const demand = parseFloat(demandDeposit.value) || 0
+  const emergency = parseFloat(emergencyFund.value) || 5000
+  const availableForExpenses = demand - emergency
 
-  const demand = existingDemandDeposit.value
-  if (!demand) {
-    // No demand deposit - need to add one or use new allocation
-    if (netNewCash.value < quarterlyExpense.value) {
-      return {
-        type: 'error',
-        message: `活期存款不足：缺少活期存款覆盖季度支出 ¥${formatAmount(quarterlyExpense.value)}`
-      }
-    }
-    return null
-  }
-
-  const availableDemand = demand.amount - (parseFloat(emergencyFund.value) || 5000)
-  if (availableDemand < quarterlyExpense.value) {
-    const shortfall = quarterlyExpense.value - availableDemand
+  if (availableForExpenses < quarterlyExpense.value) {
+    const shortfall = quarterlyExpense.value - availableForExpenses
     return {
       type: 'warning',
-      message: `流动性预警：活期存款减去应急金后不足以覆盖季度支出，缺口 ¥${formatAmount(shortfall)}`
+      message: `流动性预警：活期存款(¥${formatAmount(demand)}) - 应急金(¥${formatAmount(emergency)}) = ¥${formatAmount(availableForExpenses)}，不足以覆盖季度支出(¥${formatAmount(quarterlyExpense.value)})，缺口 ¥${formatAmount(shortfall)}`
     }
   }
   return null
@@ -248,6 +249,29 @@ const deleteDeposit = (index) => {
   showToast({ title: '已删除', icon: 'success', duration: 1500 })
 }
 
+// Helper to find index by deposit ID
+const getDepositIndexById = (id) => {
+  return existingPortfolio.value.findIndex(d => d.id === id)
+}
+
+// Edit deposit by ID (for filtered list)
+const openAddDepositModalById = (id) => {
+  const index = getDepositIndexById(id)
+  if (index >= 0) {
+    openAddDepositModal(index)
+  }
+}
+
+// Delete deposit by ID (for filtered list)
+const deleteDepositById = (id) => {
+  const index = getDepositIndexById(id)
+  if (index >= 0) {
+    existingPortfolio.value.splice(index, 1)
+    saveExistingPortfolio()
+    showToast({ title: '已删除', icon: 'success', duration: 1500 })
+  }
+}
+
 const closeDepositModal = () => {
   showAddDepositModal.value = false
   editingDepositIndex.value = -1
@@ -276,11 +300,11 @@ const calculateEarnedInterest = (deposit) => {
 
 // Generate plan
 const generatePlanHandler = () => {
-  const totalCashValue = totalCashComputed.value  // Use computed total
+  const totalCashValue = totalCashComputed.value
   let monthlyExpenseValue = parseFloat(monthlyExpense.value)
 
   if (totalCashValue <= 0) {
-    showToast({ title: '请添加现有存款或输入追加新资金', icon: 'none' })
+    showToast({ title: '请输入活期存款金额或添加定期存款', icon: 'none' })
     return
   }
 
@@ -330,7 +354,7 @@ const generatePlanHandler = () => {
 
   // Save form inputs for next time
   storage.setSync('lastInput', {
-    additionalCash: additionalCash.value,
+    demandDeposit: demandDeposit.value,
     housingExpense: housingExpense.value,
     foodExpense: foodExpense.value,
     otherExpense: otherExpense.value,
@@ -418,8 +442,7 @@ const sendToExecute = () => {
 onMounted(() => {
   const lastInput = storage.getSync('lastInput')
   if (lastInput) {
-    totalCash.value = lastInput.totalCash || ''
-    additionalCash.value = lastInput.additionalCash || ''  // Load additional cash
+    demandDeposit.value = lastInput.demandDeposit || ''
     housingExpense.value = lastInput.housingExpense || ''
     foodExpense.value = lastInput.foodExpense || ''
     otherExpense.value = lastInput.otherExpense || ''
@@ -482,23 +505,25 @@ const saveExistingPortfolio = () => {
           <div class="section-title">基本信息</div>
 
           <div class="form-grid">
+            <!-- 活期存款 Input -->
             <div class="input-group">
-              <label class="input-label">追加新资金（元）</label>
+              <label class="input-label">活期存款（元）</label>
               <div class="amount-input-wrap">
                 <span class="currency">¥</span>
                 <input
                   type="text"
                   inputmode="numeric"
                   class="input-field"
-                  placeholder="除现有存款外，新增投资金额"
-                  :value="additionalCash"
-                  @input="(e) => { additionalCash = e.target.value; calculateExpenses() }"
-                  @blur="(e) => { additionalCash = e.target.value }"
+                  placeholder="当前现金/活期账户余额"
+                  :value="demandDeposit"
+                  @input="(e) => { demandDeposit = e.target.value }"
+                  @blur="(e) => { demandDeposit = e.target.value }"
                 />
               </div>
-              <div class="input-hint">现有存款外，准备新投入的资金</div>
+              <div class="input-hint">可随时支取的现金/活期存款</div>
             </div>
 
+            <!-- 应急金 Input -->
             <div class="input-group">
               <label class="input-label">应急金（元）</label>
               <div class="amount-input-wrap">
@@ -513,7 +538,26 @@ const saveExistingPortfolio = () => {
                   @blur="(e) => { emergencyFund = e.target.value }"
                 />
               </div>
-              <div class="input-hint">应急金将永久保留在活期，不参与滚动</div>
+              <div class="input-hint">从活期存款中预留，不参与滚动</div>
+            </div>
+          </div>
+
+          <!-- Capital Summary Cards -->
+          <div class="capital-summary">
+            <div class="capital-card">
+              <div class="capital-card-label">💵 活期存款</div>
+              <div class="capital-card-value">¥{{ formatAmount(parseFloat(demandDeposit) || 0) }}</div>
+              <div class="capital-card-hint">可随时支取</div>
+            </div>
+            <div class="capital-card">
+              <div class="capital-card-label">📋 定期存款</div>
+              <div class="capital-card-value">¥{{ formatAmount(existingPortfolioTotal) }}</div>
+              <div class="capital-card-hint">{{ existingPortfolio.filter(d => d.type !== '活期存款').length }}笔待到期</div>
+            </div>
+            <div class="capital-card total">
+              <div class="capital-card-label">💰 资金总额</div>
+              <div class="capital-card-value highlight">¥{{ formatAmount(totalCashComputed) }}</div>
+              <div class="capital-card-hint">活期+定期</div>
             </div>
           </div>
 
@@ -585,10 +629,10 @@ const saveExistingPortfolio = () => {
 
           <!-- Existing Portfolio Section -->
           <div class="section-title" style="margin-top: 24px;">
-            <span>📋 现有存款{{ existingPortfolio.length > 0 ? ` (${existingPortfolio.length}笔)` : '' }}</span>
+            <span>📋 现有定期存款</span>
             <div class="section-actions">
-              <span v-if="!showExistingPortfolio && totalCashComputed > 0" class="section-summary">
-                总额: ¥{{ formatAmount(totalCashComputed) }}
+              <span v-if="!showExistingPortfolio && existingPortfolio.filter(d => d.type !== '活期存款').length > 0" class="section-summary">
+                {{ existingPortfolio.filter(d => d.type !== '活期存款').length }}笔, ¥{{ formatAmount(existingPortfolioTotal) }}
               </span>
               <button class="btn-toggle" @click="toggleExistingPortfolio">
                 {{ showExistingPortfolio ? '收起' : '展开' }}
@@ -597,35 +641,49 @@ const saveExistingPortfolio = () => {
           </div>
 
           <div v-if="showExistingPortfolio" class="existing-portfolio-section">
+            <!-- Maturity Timeline Preview -->
+            <div v-if="existingPortfolio.filter(d => d.type !== '活期存款').length > 0" class="maturity-timeline-preview">
+              <div class="timeline-header">
+                <span class="timeline-title">⏰ 到期时间线</span>
+              </div>
+              <div class="timeline-list">
+                <div
+                  v-for="deposit in existingPortfolio.filter(d => d.type !== '活期存款').sort((a, b) => new Date(a.maturityDate) - new Date(b.maturityDate))"
+                  :key="deposit.id"
+                  :class="['timeline-item-compact', getDaysUntilMaturity(deposit.maturityDate) <= 90 ? 'near' : '']"
+                >
+                  <span class="timeline-dot-small"></span>
+                  <span class="timeline-type">{{ deposit.type }}</span>
+                  <span class="timeline-amount">¥{{ formatAmount(deposit.amount) }}</span>
+                  <span class="timeline-date">{{ formatDate(deposit.maturityDate, 'MM月DD日') }}</span>
+                  <span class="timeline-days">({{ getDaysUntilMaturity(deposit.maturityDate) }}天后)</span>
+                </div>
+              </div>
+            </div>
+
             <!-- Portfolio Summary -->
-            <div v-if="existingPortfolio.length > 0 || parseFloat(additionalCash) > 0" class="portfolio-summary">
+            <div v-if="existingPortfolio.filter(d => d.type !== '活期存款').length > 0" class="portfolio-summary">
               <div class="summary-row">
-                <span class="summary-label">现有存款合计</span>
+                <span class="summary-label">定期存款合计</span>
                 <span class="summary-value">¥{{ formatAmount(existingPortfolioTotal) }}</span>
               </div>
-              <div v-if="parseFloat(additionalCash) > 0" class="summary-row">
-                <span class="summary-label">追加新资金</span>
-                <span class="summary-value">¥{{ formatAmount(parseFloat(additionalCash) || 0) }}</span>
-              </div>
-              <div class="summary-row total-row">
-                <span class="summary-label">存款总额</span>
-                <span class="summary-value highlight">¥{{ formatAmount(totalCashComputed) }}</span>
-              </div>
               <div class="summary-row">
-                <span class="summary-label">可用于新建计划</span>
-                <span class="summary-value info">¥{{ formatAmount(netNewCash) }}</span>
+                <span class="summary-label">即将到期(&lt;90天)</span>
+                <span :class="['summary-value', existingPortfolio.filter(d => d.type !== '活期存款' && getDaysUntilMaturity(d.maturityDate) <= 90).length > 0 ? 'warning' : '']">
+                  {{ existingPortfolio.filter(d => d.type !== '活期存款' && getDaysUntilMaturity(d.maturityDate) <= 90).length }}笔
+                </span>
               </div>
             </div>
 
             <!-- Deposit List -->
-            <div v-if="existingPortfolio.length > 0" class="deposit-list">
-              <div v-for="(deposit, index) in existingPortfolio" :key="deposit.id" class="deposit-item">
+            <div v-if="existingPortfolio.filter(d => d.type !== '活期存款').length > 0" class="deposit-list">
+              <div v-for="deposit in existingPortfolio.filter(d => d.type !== '活期存款')" :key="deposit.id" class="deposit-item">
                 <div class="deposit-header">
-                  <span class="deposit-type">{{ deposit.type }}</span>
+                  <span :class="['deposit-type', getDaysUntilMaturity(deposit.maturityDate) <= 90 ? 'near' : '']">{{ deposit.type }}</span>
                   <span class="deposit-amount">¥{{ formatAmount(deposit.amount) }}</span>
                   <div class="deposit-actions">
-                    <button class="btn-icon" @click="openAddDepositModal(index)">编辑</button>
-                    <button class="btn-icon danger" @click="deleteDeposit(index)">删除</button>
+                    <button class="btn-icon" @click="openAddDepositModalById(deposit.id)">编辑</button>
+                    <button class="btn-icon danger" @click="deleteDepositById(deposit.id)">删除</button>
                   </div>
                 </div>
                 <div class="deposit-details">
@@ -1294,6 +1352,173 @@ const saveExistingPortfolio = () => {
 }
 
 /* Existing Portfolio Styles */
+
+/* Capital Summary Cards */
+.capital-summary {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f8fffe 0%, #f0fdf7 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(7, 193, 96, 0.15);
+}
+
+.capital-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s;
+}
+
+.capital-card:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(7, 193, 96, 0.1);
+}
+
+.capital-card.total {
+  background: linear-gradient(135deg, #07C160 0%, #06ad56 100%);
+  border-color: #07C160;
+  color: white;
+}
+
+.capital-card-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.capital-card.total .capital-card-label {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.capital-card-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
+  margin-bottom: 4px;
+}
+
+.capital-card-value.highlight {
+  color: white;
+}
+
+.capital-card-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.capital-card.total .capital-card-hint {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Maturity Timeline Preview */
+.maturity-timeline-preview {
+  background: white;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.timeline-header {
+  padding: 12px 16px;
+  background: #f8f9fa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.timeline-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.timeline-list {
+  padding: 8px 0;
+}
+
+.timeline-item-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.timeline-item-compact:hover {
+  background: #f8f9fa;
+}
+
+.timeline-item-compact.near {
+  background: rgba(255, 159, 67, 0.08);
+}
+
+.timeline-dot-small {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  flex-shrink: 0;
+}
+
+.timeline-item-compact.near .timeline-dot-small {
+  background: #FF9F43;
+  animation: pulse-dot 2s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.2); }
+}
+
+.timeline-type {
+  width: 70px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.timeline-amount {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: 'DIN Alternate', monospace;
+}
+
+.timeline-date {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.timeline-days {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  width: 60px;
+  text-align: right;
+}
+
+.timeline-item-compact.near .timeline-days {
+  color: #FF9F43;
+  font-weight: 500;
+}
+
+/* Deposit type near maturity */
+.deposit-type.near {
+  color: #FF9F43;
+  font-weight: 500;
+}
+
+/* Summary value warning */
+.summary-value.warning {
+  color: #FF9F43;
+}
+
 .section-title {
   display: flex;
   justify-content: space-between;
