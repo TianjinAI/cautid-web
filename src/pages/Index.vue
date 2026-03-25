@@ -14,6 +14,7 @@ const router = useRouter()
 
 // Form data
 const totalCash = ref('')
+const additionalCash = ref('')  // NEW: Additional cash to invest
 const housingExpense = ref('')
 const foodExpense = ref('')
 const otherExpense = ref('')
@@ -77,9 +78,14 @@ const existingPortfolioTotal = computed(() => {
   return existingPortfolio.value.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
 })
 
+const totalCashComputed = computed(() => {
+  // 存款总额 = 现有存款 + 追加新资金
+  return existingPortfolioTotal.value + (parseFloat(additionalCash.value) || 0)
+})
+
 const netNewCash = computed(() => {
-  const total = parseFloat(totalCash.value) || 0
-  return Math.max(0, total - existingPortfolioTotal.value)
+  // 可用于新建计划 = 追加新资金 (user explicitly wants to invest this)
+  return parseFloat(additionalCash.value) || 0
 })
 
 const existingDemandDeposit = computed(() => {
@@ -270,11 +276,11 @@ const calculateEarnedInterest = (deposit) => {
 
 // Generate plan
 const generatePlanHandler = () => {
-  const totalCashValue = parseFloat(totalCash.value)
+  const totalCashValue = totalCashComputed.value  // Use computed total
   let monthlyExpenseValue = parseFloat(monthlyExpense.value)
 
-  if (!totalCashValue || totalCashValue <= 0) {
-    showToast({ title: '请输入有效存款金额', icon: 'none' })
+  if (totalCashValue <= 0) {
+    showToast({ title: '请添加现有存款或输入追加新资金', icon: 'none' })
     return
   }
 
@@ -321,6 +327,16 @@ const generatePlanHandler = () => {
   showProrata.value = shouldShowProrata
 
   showToast({ title: '已生成计划', icon: 'success', duration: 1500 })
+
+  // Save form inputs for next time
+  storage.setSync('lastInput', {
+    additionalCash: additionalCash.value,
+    housingExpense: housingExpense.value,
+    foodExpense: foodExpense.value,
+    otherExpense: otherExpense.value,
+    emergencyFund: emergencyFund.value,
+    planningHorizon: planningHorizon.value
+  })
 }
 
 // Save plan
@@ -335,8 +351,8 @@ const savePlan = () => {
   const newPlan = {
     createTime: new Date().toISOString(),
     createTimeFormatted: formatDate(new Date(), 'YYYY 年 MM 月 DD 日 HH:mm'),
-    totalCash: parseFloat(totalCash.value),
-    totalCashFormatted: formatAmount(parseFloat(totalCash.value)),
+    totalCash: totalCashComputed.value,
+    totalCashFormatted: formatAmount(totalCashComputed.value),
     monthlyExpense: monthlyExpense.value,
     planningHorizon: parseInt(planningHorizon.value),
     executionList: executionList.value.map(item => ({
@@ -403,6 +419,7 @@ onMounted(() => {
   const lastInput = storage.getSync('lastInput')
   if (lastInput) {
     totalCash.value = lastInput.totalCash || ''
+    additionalCash.value = lastInput.additionalCash || ''  // Load additional cash
     housingExpense.value = lastInput.housingExpense || ''
     foodExpense.value = lastInput.foodExpense || ''
     otherExpense.value = lastInput.otherExpense || ''
@@ -466,19 +483,20 @@ const saveExistingPortfolio = () => {
 
           <div class="form-grid">
             <div class="input-group">
-              <label class="input-label">存款总额（元）</label>
+              <label class="input-label">追加新资金（元）</label>
               <div class="amount-input-wrap">
                 <span class="currency">¥</span>
                 <input
                   type="text"
                   inputmode="numeric"
                   class="input-field"
-                  placeholder="请输入总存款金额"
-                  :value="totalCash"
-                  @input="onTotalCashInput"
-                  @blur="(e) => { totalCash = e.target.value }"
+                  placeholder="除现有存款外，新增投资金额"
+                  :value="additionalCash"
+                  @input="(e) => { additionalCash = e.target.value; calculateExpenses() }"
+                  @blur="(e) => { additionalCash = e.target.value }"
                 />
               </div>
+              <div class="input-hint">现有存款外，准备新投入的资金</div>
             </div>
 
             <div class="input-group">
@@ -567,22 +585,35 @@ const saveExistingPortfolio = () => {
 
           <!-- Existing Portfolio Section -->
           <div class="section-title" style="margin-top: 24px;">
-            <span>📋 现有存款（可选）</span>
-            <button class="btn-toggle" @click="toggleExistingPortfolio">
-              {{ showExistingPortfolio ? '收起' : '展开' }}
-            </button>
+            <span>📋 现有存款{{ existingPortfolio.length > 0 ? ` (${existingPortfolio.length}笔)` : '' }}</span>
+            <div class="section-actions">
+              <span v-if="!showExistingPortfolio && totalCashComputed > 0" class="section-summary">
+                总额: ¥{{ formatAmount(totalCashComputed) }}
+              </span>
+              <button class="btn-toggle" @click="toggleExistingPortfolio">
+                {{ showExistingPortfolio ? '收起' : '展开' }}
+              </button>
+            </div>
           </div>
 
           <div v-if="showExistingPortfolio" class="existing-portfolio-section">
             <!-- Portfolio Summary -->
-            <div v-if="existingPortfolio.length > 0" class="portfolio-summary">
+            <div v-if="existingPortfolio.length > 0 || parseFloat(additionalCash) > 0" class="portfolio-summary">
               <div class="summary-row">
                 <span class="summary-label">现有存款合计</span>
                 <span class="summary-value">¥{{ formatAmount(existingPortfolioTotal) }}</span>
               </div>
+              <div v-if="parseFloat(additionalCash) > 0" class="summary-row">
+                <span class="summary-label">追加新资金</span>
+                <span class="summary-value">¥{{ formatAmount(parseFloat(additionalCash) || 0) }}</span>
+              </div>
+              <div class="summary-row total-row">
+                <span class="summary-label">存款总额</span>
+                <span class="summary-value highlight">¥{{ formatAmount(totalCashComputed) }}</span>
+              </div>
               <div class="summary-row">
                 <span class="summary-label">可用于新建计划</span>
-                <span class="summary-value highlight">¥{{ formatAmount(netNewCash) }}</span>
+                <span class="summary-value info">¥{{ formatAmount(netNewCash) }}</span>
               </div>
             </div>
 
@@ -673,7 +704,7 @@ const saveExistingPortfolio = () => {
         </div>
 
         <!-- Tips -->
-        <div v-if="!showResult && totalCash" class="card tips-card">
+        <div v-if="!showResult && totalCashComputed > 0" class="card tips-card">
           <div class="section-title">温馨提示</div>
           <div class="tip-list">
             <div class="tip-item">
@@ -1286,6 +1317,21 @@ const saveExistingPortfolio = () => {
   color: white;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(12, 193, 96, 0.1);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
+}
+
 .existing-portfolio-section {
   margin-top: 16px;
   padding: 16px;
@@ -1323,6 +1369,21 @@ const saveExistingPortfolio = () => {
 
 .summary-value.highlight {
   color: var(--primary-color);
+}
+
+.summary-value.info {
+  color: var(--info-color);
+}
+
+.summary-row.total-row {
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  margin-top: 4px;
+}
+
+.summary-row.total-row .summary-value {
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .deposit-list {
