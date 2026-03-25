@@ -227,6 +227,9 @@ const saveDeposit = () => {
     existingPortfolio.value.push(deposit)
   }
 
+  // Save to localStorage
+  saveExistingPortfolio()
+
   showAddDepositModal.value = false
   editingDepositIndex.value = -1
   showToast({ title: editingDepositIndex.value >= 0 ? '已更新' : '已添加', icon: 'success', duration: 1500 })
@@ -234,6 +237,8 @@ const saveDeposit = () => {
 
 const deleteDeposit = (index) => {
   existingPortfolio.value.splice(index, 1)
+  // Save to localStorage
+  saveExistingPortfolio()
   showToast({ title: '已删除', icon: 'success', duration: 1500 })
 }
 
@@ -405,7 +410,19 @@ onMounted(() => {
     planningHorizon.value = lastInput.planningHorizon || '1'
     calculateExpenses()
   }
+
+  // Load existing portfolio from localStorage
+  const savedPortfolio = storage.getSync('existingPortfolio')
+  if (savedPortfolio && Array.isArray(savedPortfolio)) {
+    existingPortfolio.value = savedPortfolio
+    showToast({ title: `已加载 ${savedPortfolio.length} 笔现有存款`, icon: 'success', duration: 2000 })
+  }
 })
+
+// Save existing portfolio to localStorage
+const saveExistingPortfolio = () => {
+  storage.setSync('existingPortfolio', existingPortfolio.value)
+}
 </script>
 
 <template>
@@ -716,6 +733,7 @@ onMounted(() => {
         <!-- Action Buttons -->
         <div v-if="showResult" class="action-buttons">
           <button class="btn-secondary" @click="savePlan">保存到规划</button>
+          <button class="btn-secondary" @click="generatePlanHandler">🔄 重新生成</button>
           <button class="btn-primary" @click="sendToExecute">送去执行</button>
         </div>
 
