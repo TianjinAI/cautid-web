@@ -4,80 +4,202 @@ import { useRouter, useRoute } from 'vue-router'
 const router = useRouter()
 const route = useRoute()
 
-const tabs = [
-  { path: '/', name: '规划', iconActive: 'home-active.png', icon: 'home.png' },
-  { path: '/execute', name: '执行', iconActive: 'execute-active.png', icon: 'execute.png' },
-  { path: '/profile', name: '我的', iconActive: 'profile-active.png', icon: 'profile.png' }
+const navItems = [
+  { path: '/', name: '规划', icon: '💰' },
+  { path: '/execute', name: '执行', icon: '📋' },
+  { path: '/profile', name: '我的', icon: '👤' }
 ]
 
 const isActive = (path) => route.path === path
+
+const getPageTitle = () => {
+  const item = navItems.find(item => item.path === route.path)
+  return item ? item.name : '财梯'
+}
 </script>
 
 <template>
-  <div class="app">
-    <router-view />
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <div class="sidebar-logo-icon">财</div>
+          <span>财梯</span>
+        </div>
+      </div>
 
-    <!-- Tab Bar - only show on main tabs -->
-    <nav v-if="['/', '/execute', '/profile'].includes(route.path)" class="tab-bar">
-      <a
-        v-for="tab in tabs"
-        :key="tab.path"
-        :href="tab.path"
-        class="tab-item"
-        :class="{ active: isActive(tab.path) }"
-      >
-        <span class="tab-item-icon">{{ tab.name[0] }}</span>
-        <span class="tab-item-label">{{ tab.name }}</span>
-      </a>
-    </nav>
+      <nav class="sidebar-nav">
+        <router-link
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          class="sidebar-item"
+          :class="{ active: isActive(item.path) }"
+        >
+          <span class="sidebar-item-icon">{{ item.icon }}</span>
+          <span>{{ item.name }}</span>
+        </router-link>
+      </nav>
+
+      <div class="sidebar-footer">
+        存款规划助手 v1.0
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Header -->
+      <header class="top-header">
+        <h1 class="header-title">{{ getPageTitle() }}</h1>
+        <div class="header-actions">
+          <!-- Optional: Add user menu or other actions here -->
+        </div>
+      </header>
+
+      <!-- Page Content -->
+      <router-view />
+    </main>
   </div>
 </template>
 
 <style scoped>
-.app {
+.app-layout {
+  display: flex;
   min-height: 100vh;
-  background-color: var(--background-color);
 }
 
-.tab-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 60px;
+.sidebar {
+  width: var(--sidebar-width);
   background: var(--card-background);
-  border-top: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
   display: flex;
-  justify-content: space-around;
-  align-items: center;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
   z-index: 1000;
 }
 
-.tab-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-decoration: none;
-  color: var(--text-secondary);
-  font-size: 11px;
-  transition: color 0.2s;
+.sidebar-header {
+  padding: 24px;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.tab-item.active {
+.sidebar-logo {
+  font-size: 24px;
+  font-weight: 700;
   color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.tab-item-icon {
-  width: 24px;
-  height: 24px;
-  margin-bottom: 4px;
+.sidebar-logo-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, var(--primary-color), #06AD56);
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: white;
   font-size: 20px;
 }
 
-.tab-item-label {
-  font-size: 11px;
+.sidebar-nav {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.sidebar-item:hover {
+  background: rgba(12, 193, 96, 0.05);
+  color: var(--text-primary);
+}
+
+.sidebar-item.active {
+  background: rgba(12, 193, 96, 0.1);
+  color: var(--primary-color);
+}
+
+.sidebar-item-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.sidebar-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.main-content {
+  flex: 1;
+  margin-left: var(--sidebar-width);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.top-header {
+  height: var(--header-height);
+  background: var(--card-background);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--secondary-color);
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* Mobile responsive - hide sidebar, show bottom nav */
+@media (max-width: 768px) {
+  .sidebar {
+    display: none;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .top-header {
+    padding: 0 16px;
+  }
 }
 </style>

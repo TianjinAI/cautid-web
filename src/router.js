@@ -4,22 +4,22 @@ const routes = [
   {
     path: '/',
     name: 'Index',
-    component: () => import('../pages/Index.vue')
+    component: () => import('./pages/Index.vue')
   },
   {
     path: '/detail',
     name: 'Detail',
-    component: () => import('../pages/Detail.vue')
+    component: () => import('./pages/Detail.vue')
   },
   {
     path: '/execute',
     name: 'Execute',
-    component: () => import('../pages/Execute.vue')
+    component: () => import('./pages/Execute.vue')
   },
   {
     path: '/profile',
     name: 'Profile',
-    component: () => import('../pages/Profile.vue')
+    component: () => import('./pages/Profile.vue')
   }
 ];
 

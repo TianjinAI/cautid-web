@@ -46,6 +46,71 @@ const cashFlowTimeline = ref([])
 const executionList = ref([])
 const showProrata = ref(false)
 
+// Existing portfolio
+const showExistingPortfolio = ref(false)
+const existingPortfolio = ref([])
+const showAddDepositModal = ref(false)
+const editingDepositIndex = ref(-1)
+
+// New deposit form
+const newDeposit = ref({
+  type: '3个月定期',
+  amount: '',
+  interestRate: '',
+  depositDate: '',
+  maturityDate: ''
+})
+
+// Deposit type options for existing portfolio
+const depositTypeOptions = [
+  { value: '活期存款', label: '活期存款', defaultRate: 0.10 },
+  { value: '3个月定期', label: '3个月定期', defaultRate: 0.70 },
+  { value: '6个月定期', label: '6个月定期', defaultRate: 0.95 },
+  { value: '1年定期', label: '1年定期', defaultRate: 1.15 },
+  { value: '3年定期', label: '3年定期', defaultRate: 1.30 },
+  { value: '5年定期', label: '5年定期', defaultRate: 1.50 }
+]
+
+// Computed for existing portfolio
+const existingPortfolioTotal = computed(() => {
+  return existingPortfolio.value.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
+})
+
+const netNewCash = computed(() => {
+  const total = parseFloat(totalCash.value) || 0
+  return Math.max(0, total - existingPortfolioTotal.value)
+})
+
+const existingDemandDeposit = computed(() => {
+  return existingPortfolio.value.find(d => d.type === '活期存款')
+})
+
+const liquidityWarning = computed(() => {
+  if (!showResult.value || existingPortfolio.value.length === 0) return null
+
+  const demand = existingDemandDeposit.value
+  if (!demand) {
+    // No demand deposit - need to add one or use new allocation
+    if (netNewCash.value < quarterlyExpense.value) {
+      return {
+        type: 'error',
+        message: `活期存款不足：缺少活期存款覆盖季度支出 ¥${formatAmount(quarterlyExpense.value)}`
+      }
+    }
+    return null
+  }
+
+  const availableDemand = demand.amount - (parseFloat(emergencyFund.value) || 5000)
+  if (availableDemand < quarterlyExpense.value) {
+    const shortfall = quarterlyExpense.value - availableDemand
+    return {
+      type: 'warning',
+      message: `流动性预警：活期存款减去应急金后不足以覆盖季度支出，缺口 ¥${formatAmount(shortfall)}`
+    }
+  }
+  return null
+})
+
 // Computed
 const monthlyExpenseFormatted = computed(() => formatAmount(monthlyExpense.value))
 const quarterlyExpenseFormatted = computed(() => formatAmount(quarterlyExpense.value))
@@ -88,6 +153,115 @@ const onHorizonSelect = (value) => {
   planningHorizon.value = value
 }
 
+// Existing portfolio handlers
+const toggleExistingPortfolio = () => {
+  showExistingPortfolio.value = !showExistingPortfolio.value
+}
+
+const openAddDepositModal = (index = -1) => {
+  editingDepositIndex.value = index
+  if (index >= 0 && existingPortfolio.value[index]) {
+    // Edit mode - populate form
+    const deposit = existingPortfolio.value[index]
+    newDeposit.value = {
+      type: deposit.type,
+      amount: deposit.amount.toString(),
+      interestRate: deposit.interestRate.toString(),
+      depositDate: deposit.depositDate ? deposit.depositDate.split('T')[0] : '',
+      maturityDate: deposit.maturityDate ? deposit.maturityDate.split('T')[0] : ''
+    }
+  } else {
+    // Add mode - reset form
+    newDeposit.value = {
+      type: '3个月定期',
+      amount: '',
+      interestRate: '0.70',
+      depositDate: '',
+      maturityDate: ''
+    }
+  }
+  showAddDepositModal.value = true
+}
+
+const onDepositTypeChange = () => {
+  // Update default rate when type changes
+  const option = depositTypeOptions.find(o => o.value === newDeposit.value.type)
+  if (option) {
+    newDeposit.value.interestRate = option.defaultRate.toString()
+  }
+  // Clear maturity date for demand deposit
+  if (newDeposit.value.type === '活期存款') {
+    newDeposit.value.maturityDate = ''
+  }
+}
+
+const saveDeposit = () => {
+  // Validate
+  if (!newDeposit.value.amount || parseFloat(newDeposit.value.amount) <= 0) {
+    showToast({ title: '请输入有效金额', icon: 'none' })
+    return
+  }
+
+  if (newDeposit.value.type !== '活期存款' && !newDeposit.value.maturityDate) {
+    showToast({ title: '请输入到期日期', icon: 'none' })
+    return
+  }
+
+  const deposit = {
+    id: editingDepositIndex.value >= 0 ? existingPortfolio.value[editingDepositIndex.value].id : Date.now().toString(),
+    type: newDeposit.value.type,
+    amount: parseFloat(newDeposit.value.amount),
+    interestRate: parseFloat(newDeposit.value.interestRate) || 0,
+    depositDate: newDeposit.value.depositDate ? new Date(newDeposit.value.depositDate).toISOString() : new Date().toISOString(),
+    maturityDate: newDeposit.value.type === '活期存款' ? null : new Date(newDeposit.value.maturityDate).toISOString(),
+    status: 'active',
+    isExisting: true
+  }
+
+  if (editingDepositIndex.value >= 0) {
+    // Update existing
+    existingPortfolio.value[editingDepositIndex.value] = deposit
+  } else {
+    // Add new
+    existingPortfolio.value.push(deposit)
+  }
+
+  showAddDepositModal.value = false
+  editingDepositIndex.value = -1
+  showToast({ title: editingDepositIndex.value >= 0 ? '已更新' : '已添加', icon: 'success', duration: 1500 })
+}
+
+const deleteDeposit = (index) => {
+  existingPortfolio.value.splice(index, 1)
+  showToast({ title: '已删除', icon: 'success', duration: 1500 })
+}
+
+const closeDepositModal = () => {
+  showAddDepositModal.value = false
+  editingDepositIndex.value = -1
+}
+
+// Helper to calculate days until maturity
+const getDaysUntilMaturity = (maturityDate) => {
+  if (!maturityDate) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const maturity = new Date(maturityDate)
+  const diff = Math.ceil((maturity - today) / (1000 * 60 * 60 * 24))
+  return diff
+}
+
+// Calculate interest earned so far for existing deposit
+const calculateEarnedInterest = (deposit) => {
+  if (!deposit.depositDate) return 0
+  const startDate = new Date(deposit.depositDate)
+  const today = new Date()
+  const days = Math.floor((today - startDate) / (1000 * 60 * 60 * 24))
+  const rate = deposit.interestRate / 100
+  // Simple interest calculation
+  return deposit.amount * rate * (days / 365)
+}
+
 // Generate plan
 const generatePlanHandler = () => {
   const totalCashValue = parseFloat(totalCash.value)
@@ -109,7 +283,8 @@ const generatePlanHandler = () => {
     totalCash: totalCashValue,
     monthlyExpense: monthlyExpenseValue,
     emergencyFund: emergencyFundValue,
-    planningHorizon: parseInt(planningHorizon.value)
+    planningHorizon: parseInt(planningHorizon.value),
+    existingPortfolio: existingPortfolio.value // Add existing portfolio
   }
 
   const plan = generatePlan(inputData)
@@ -140,11 +315,6 @@ const generatePlanHandler = () => {
   showProrata.value = shouldShowProrata
 
   showToast({ title: '已生成计划', icon: 'success', duration: 1500 })
-
-  // Scroll to results
-  setTimeout(() => {
-    window.scrollTo({ top: 400, behavior: 'smooth' })
-  }, 500)
 }
 
 // Save plan
@@ -239,42 +409,83 @@ onMounted(() => {
 
 <template>
   <div class="page-container">
-    <div class="container">
-      <!-- Header -->
-      <div class="header-section">
-        <h1 class="app-title">财梯</h1>
-        <p class="app-subtitle">季度滚动阶梯式存款规划</p>
-        <p class="app-desc">智能分配存款，确保每个季度初资金准时到位</p>
+    <!-- Page Header -->
+    <div class="page-header">
+      <h1 class="page-title">存款规划</h1>
+      <p class="page-subtitle">智能分配存款，确保每个季度初资金准时到位</p>
+    </div>
+
+    <!-- Stats Cards -->
+    <div v-if="monthlyExpense > 0" class="stat-cards">
+      <div class="stat-card">
+        <div class="stat-card-label">月度支出</div>
+        <div class="stat-card-value">¥{{ monthlyExpenseFormatted }}</div>
+        <div class="stat-card-subtitle">每月固定开支</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-card-label">季度支出</div>
+        <div class="stat-card-value">¥{{ quarterlyExpenseFormatted }}</div>
+        <div class="stat-card-subtitle">每季度需准备</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">年度支出</div>
+        <div class="stat-card-value">¥{{ annualExpenseFormatted }}</div>
+        <div class="stat-card-subtitle">全年支出预估</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">规划年限</div>
+        <div class="stat-card-value">{{ planningHorizon }}年</div>
+        <div class="stat-card-subtitle">存款滚动周期</div>
+      </div>
+    </div>
 
-      <!-- Input Form Card -->
-      <div class="card input-card">
-        <div class="section-title">基础数据</div>
+    <!-- Main Content Grid -->
+    <div class="content-grid">
+      <!-- Left Column: Input Form -->
+      <div class="form-column">
+        <div class="card form-card">
+          <div class="section-title">基本信息</div>
 
-        <!-- Total Cash -->
-        <div class="input-group">
-          <label class="input-label">总存款金额（元）</label>
-          <div class="amount-input-wrap">
-            <span class="currency">¥</span>
-            <input
-              type="text"
-              inputmode="numeric"
-              class="input-field"
-              placeholder="请输入总存款金额"
-              :value="totalCash"
-              @input="onTotalCashInput"
-              @blur="(e) => { totalCash = e.target.value }"
-            />
+          <div class="form-grid">
+            <div class="input-group">
+              <label class="input-label">存款总额（元）</label>
+              <div class="amount-input-wrap">
+                <span class="currency">¥</span>
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  class="input-field"
+                  placeholder="请输入总存款金额"
+                  :value="totalCash"
+                  @input="onTotalCashInput"
+                  @blur="(e) => { totalCash = e.target.value }"
+                />
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label class="input-label">应急金（元）</label>
+              <div class="amount-input-wrap">
+                <span class="currency">¥</span>
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  class="input-field"
+                  placeholder="建议：5000"
+                  :value="emergencyFund"
+                  @input="onEmergencyFundInput"
+                  @blur="(e) => { emergencyFund = e.target.value }"
+                />
+              </div>
+              <div class="input-hint">应急金将永久保留在活期，不参与滚动</div>
+            </div>
           </div>
-        </div>
 
-        <!-- Monthly Expenses -->
-        <div class="expense-section">
-          <div class="input-label">月度支出明细</div>
-          <div class="expense-items">
-            <div class="expense-item">
-              <span class="expense-label">房屋支出</span>
-              <div class="amount-input-wrap expense-input">
+          <div class="section-title" style="margin-top: 24px;">月度支出明细</div>
+          <div class="form-grid">
+            <div class="input-group">
+              <label class="input-label">房屋支出</label>
+              <div class="amount-input-wrap">
                 <span class="currency">¥</span>
                 <input
                   type="text"
@@ -287,9 +498,10 @@ onMounted(() => {
                 />
               </div>
             </div>
-            <div class="expense-item">
-              <span class="expense-label">餐饮支出</span>
-              <div class="amount-input-wrap expense-input">
+
+            <div class="input-group">
+              <label class="input-label">餐饮支出</label>
+              <div class="amount-input-wrap">
                 <span class="currency">¥</span>
                 <input
                   type="text"
@@ -302,9 +514,10 @@ onMounted(() => {
                 />
               </div>
             </div>
-            <div class="expense-item">
-              <span class="expense-label">其他支出</span>
-              <div class="amount-input-wrap expense-input">
+
+            <div class="input-group">
+              <label class="input-label">其他支出</label>
+              <div class="amount-input-wrap">
                 <span class="currency">¥</span>
                 <input
                   type="text"
@@ -317,82 +530,154 @@ onMounted(() => {
                 />
               </div>
             </div>
-          </div>
-        </div>
 
-        <!-- Emergency Fund -->
-        <div class="input-group">
-          <label class="input-label">应急金（元）</label>
-          <div class="amount-input-wrap">
-            <span class="currency">¥</span>
-            <input
-              type="text"
-              inputmode="numeric"
-              class="input-field"
-              placeholder="建议：5000"
-              :value="emergencyFund"
-              @input="onEmergencyFundInput"
-              @blur="(e) => { emergencyFund = e.target.value }"
-            />
-          </div>
-          <div class="input-hint">应急金将永久保留在活期，不参与滚动</div>
-        </div>
-
-        <!-- Planning Horizon -->
-        <div class="input-group">
-          <label class="input-label">规划区间</label>
-          <div class="horizon-selector">
-            <div
-              v-for="option in horizonOptions"
-              :key="option.value"
-              class="horizon-option"
-              :class="{ active: planningHorizon === option.value }"
-              @click="onHorizonSelect(option.value)"
-            >
-              {{ option.label }}
+            <div class="input-group">
+              <label class="input-label">规划区间</label>
+              <div class="horizon-selector">
+                <div
+                  v-for="option in horizonOptions"
+                  :key="option.value"
+                  class="horizon-option"
+                  :class="{ active: planningHorizon === option.value }"
+                  @click="onHorizonSelect(option.value)"
+                >
+                  {{ option.label }}
+                </div>
+              </div>
             </div>
           </div>
-          <div class="input-hint">选择滚动周期长度，到期自动续存</div>
+
+          <!-- Existing Portfolio Section -->
+          <div class="section-title" style="margin-top: 24px;">
+            <span>📋 现有存款（可选）</span>
+            <button class="btn-toggle" @click="toggleExistingPortfolio">
+              {{ showExistingPortfolio ? '收起' : '展开' }}
+            </button>
+          </div>
+
+          <div v-if="showExistingPortfolio" class="existing-portfolio-section">
+            <!-- Portfolio Summary -->
+            <div v-if="existingPortfolio.length > 0" class="portfolio-summary">
+              <div class="summary-row">
+                <span class="summary-label">现有存款合计</span>
+                <span class="summary-value">¥{{ formatAmount(existingPortfolioTotal) }}</span>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">可用于新建计划</span>
+                <span class="summary-value highlight">¥{{ formatAmount(netNewCash) }}</span>
+              </div>
+            </div>
+
+            <!-- Deposit List -->
+            <div v-if="existingPortfolio.length > 0" class="deposit-list">
+              <div v-for="(deposit, index) in existingPortfolio" :key="deposit.id" class="deposit-item">
+                <div class="deposit-header">
+                  <span class="deposit-type">{{ deposit.type }}</span>
+                  <span class="deposit-amount">¥{{ formatAmount(deposit.amount) }}</span>
+                  <div class="deposit-actions">
+                    <button class="btn-icon" @click="openAddDepositModal(index)">编辑</button>
+                    <button class="btn-icon danger" @click="deleteDeposit(index)">删除</button>
+                  </div>
+                </div>
+                <div class="deposit-details">
+                  <span v-if="deposit.type !== '活期存款'" class="detail-item">
+                    到期: {{ formatDate(deposit.maturityDate, 'YYYY年MM月DD日') }}
+                    <span :class="['maturity-badge', getDaysUntilMaturity(deposit.maturityDate) <= 90 ? 'near' : '']">
+                      {{ getDaysUntilMaturity(deposit.maturityDate) }}天后
+                    </span>
+                  </span>
+                  <span class="detail-item">利率: {{ deposit.interestRate }}%</span>
+                  <span class="detail-item interest-earned">
+                    已获利息: ¥{{ formatAmount(calculateEarnedInterest(deposit)) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Add Deposit Button -->
+            <button class="btn-add-deposit" @click="openAddDepositModal(-1)">
+              <span class="plus-icon">+</span>
+              添加现有存款
+            </button>
+
+            <!-- Liquidity Warning -->
+            <div v-if="liquidityWarning" :class="['liquidity-warning', liquidityWarning.type]">
+              <span class="warning-icon">{{ liquidityWarning.type === 'error' ? '⚠️' : '⚡' }}</span>
+              {{ liquidityWarning.message }}
+            </div>
+          </div>
+
+          <!-- Add/Edit Deposit Modal -->
+          <div v-if="showAddDepositModal" class="modal-overlay" @click.self="closeDepositModal">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3>{{ editingDepositIndex >= 0 ? '编辑存款' : '添加现有存款' }}</h3>
+                <button class="modal-close" @click="closeDepositModal">×</button>
+              </div>
+              <div class="modal-body">
+                <div class="form-group">
+                  <label>存款类型</label>
+                  <select v-model="newDeposit.type" @change="onDepositTypeChange" class="form-select">
+                    <option v-for="opt in depositTypeOptions" :key="opt.value" :value="opt.value">
+                      {{ opt.label }}
+                    </option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>金额（元）</label>
+                  <input type="number" v-model="newDeposit.amount" placeholder="请输入金额" class="form-input" />
+                </div>
+                <div class="form-group">
+                  <label>年利率（%）</label>
+                  <input type="number" v-model="newDeposit.interestRate" step="0.01" placeholder="年利率" class="form-input" />
+                </div>
+                <div class="form-group">
+                  <label>存入日期</label>
+                  <input type="date" v-model="newDeposit.depositDate" class="form-input" />
+                </div>
+                <div v-if="newDeposit.type !== '活期存款'" class="form-group">
+                  <label>到期日期</label>
+                  <input type="date" v-model="newDeposit.maturityDate" class="form-input" />
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button class="btn-secondary" @click="closeDepositModal">取消</button>
+                <button class="btn-primary" @click="saveDeposit">保存</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-section" style="margin-top: 32px;">
+            <button class="btn-primary btn-large" @click="generatePlanHandler">
+              生成存款计划
+            </button>
+          </div>
         </div>
 
-        <!-- Expense Summary -->
-        <div v-if="monthlyExpense > 0" class="expense-summary">
-          <div class="summary-item">
-            <div class="summary-label">月度支出</div>
-            <div class="summary-value">¥{{ monthlyExpenseFormatted }}</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-label">季度支出</div>
-            <div class="summary-value">¥{{ quarterlyExpenseFormatted }}</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-label">年度支出</div>
-            <div class="summary-value">¥{{ annualExpenseFormatted }}</div>
+        <!-- Tips -->
+        <div v-if="!showResult && totalCash" class="card tips-card">
+          <div class="section-title">温馨提示</div>
+          <div class="tip-list">
+            <div class="tip-item">
+              <span class="tip-icon">💡</span>
+              <span class="tip-text">每个季度首日（1 月 1 日、4 月 1 日、7 月 1 日、10 月 1 日）资金 100% 到位</span>
+            </div>
+            <div class="tip-item">
+              <span class="tip-icon">💰</span>
+              <span class="tip-text">短期资金使用定期存款，利率高于活期</span>
+            </div>
+            <div class="tip-item">
+              <span class="tip-icon">🔒</span>
+              <span class="tip-text">长期资金存入 3 年定期，享受最高利率</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Generate Button -->
-      <div class="action-section">
-        <button class="btn-primary" @click="generatePlanHandler">
-          生成存款计划
-        </button>
-      </div>
-
-      <!-- Save and Execute Buttons -->
-      <div v-if="showResult" class="action-section action-section-secondary">
-        <button class="btn-secondary" @click="savePlan">
-          保存
-        </button>
-        <button class="btn-primary" @click="sendToExecute">
-          送去执行
-        </button>
-      </div>
-
-      <!-- Results -->
-      <div v-if="showResult">
+      <!-- Right Column: Results -->
+      <div class="results-column">
         <!-- Asset Overview -->
-        <div class="card asset-overview">
+        <div v-if="showResult" class="card asset-overview">
           <div class="overview-header">
             <div class="overview-title">资产总览</div>
             <div class="overview-date">生成日期：{{ createDate }}</div>
@@ -427,44 +712,42 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Allocation List -->
-        <div class="card allocation-section">
+        <!-- Action Buttons -->
+        <div v-if="showResult" class="action-buttons">
+          <button class="btn-secondary" @click="savePlan">保存到规划</button>
+          <button class="btn-primary" @click="sendToExecute">送去执行</button>
+        </div>
+
+        <!-- Allocation Grid -->
+        <div v-if="showResult" class="card">
           <div class="section-title">存款分配方案</div>
-          <div class="allocation-list">
-            <div v-for="item in allocation" :key="item.type" class="allocation-item">
-              <div class="allocation-header">
-                <span :class="['allocation-type', item.type === '活期存款' ? 'type-current' : item.type === '3 年定期' ? 'type-long' : 'type-short']">
+          <div class="allocation-grid">
+            <div v-for="item in allocation" :key="item.type" class="allocation-card">
+              <div class="allocation-card-header">
+                <span :class="['allocation-type-badge', item.type === '活期存款' ? 'type-current' : item.type === '3 年定期' ? 'type-long' : 'type-short']">
                   {{ item.type }}
                 </span>
-                <span class="allocation-amount">¥{{ item.amountFormatted }}</span>
+                <span class="allocation-card-amount">¥{{ item.amountFormatted }}</span>
               </div>
-              <div class="allocation-details">
-                <div class="detail-row">
-                  <span class="detail-label">占比：</span>
-                  <span class="detail-value">{{ item.percentage }}%</span>
+              <div class="allocation-card-body">
+                <div class="allocation-card-row">
+                  <span>占比</span>
+                  <span class="allocation-card-value">{{ item.percentage }}%</span>
                 </div>
-                <div class="detail-row">
-                  <span class="detail-label">利率：</span>
-                  <span class="detail-value">{{ item.rate }}%</span>
+                <div class="allocation-card-row">
+                  <span>利率</span>
+                  <span class="allocation-card-value">{{ item.rate }}%</span>
                 </div>
-                <div v-if="item.maturityDateStr && item.maturityDateStr !== '随时可用'" class="detail-row">
-                  <span class="detail-label">到期日：</span>
-                  <span class="detail-value">{{ item.maturityDateStr }}</span>
+                <div v-if="item.maturityDateStr && item.maturityDateStr !== '随时可用'" class="allocation-card-row">
+                  <span>到期</span>
+                  <span class="allocation-card-value">{{ item.maturityDateStr }}</span>
                 </div>
-                <div class="detail-row">
-                  <span class="detail-label">用途：</span>
-                  <span class="detail-value">{{ item.purpose }}</span>
+                <div class="allocation-card-row">
+                  <span>用途</span>
+                  <span class="allocation-card-desc">{{ item.purpose }}</span>
                 </div>
-                <div class="detail-row">
-                  <span class="detail-label">操作：</span>
-                  <span class="detail-value">{{ item.action }}</span>
-                </div>
-                <div v-if="item.projectedInterest && item.projectedInterest > 0" class="detail-row interest-row">
-                  <span class="detail-label">预期利息：</span>
-                  <span class="detail-value interest-value">¥{{ item.interestFormatted }}</span>
-                </div>
-                <div class="detail-row disclaimer-row">
-                  <span class="disclaimer-text">* 预期利息仅供参考，实际利率以银行柜台为准</span>
+                <div v-if="item.projectedInterest && item.projectedInterest > 0" class="allocation-card-interest">
+                  预期利息 ¥{{ item.interestFormatted }}
                 </div>
               </div>
             </div>
@@ -472,7 +755,7 @@ onMounted(() => {
         </div>
 
         <!-- Timeline -->
-        <div class="card timeline-section">
+        <div v-if="showResult" class="card">
           <div class="section-title">季度资金流</div>
           <div class="timeline">
             <div v-for="(item, index) in cashFlowTimeline" :key="item.date" class="timeline-item">
@@ -489,46 +772,30 @@ onMounted(() => {
         </div>
 
         <!-- Advantages -->
-        <div class="card advantage-section">
+        <div v-if="showResult" class="card">
           <div class="section-title">方案优势</div>
-          <div class="advantage-list">
-            <div class="advantage-item">
-              <span class="advantage-icon">✓</span>
-              <span class="advantage-text">零时间缺口：每个季度首日资金 100% 到位</span>
+          <div class="advantage-grid">
+            <div class="advantage-card">
+              <span class="advantage-card-icon">✓</span>
+              <span class="advantage-card-text">零时间缺口：每个季度首日资金 100% 到位</span>
             </div>
-            <div class="advantage-item">
-              <span class="advantage-icon">✓</span>
-              <span class="advantage-text">利息最大化：短期资金用定期，长期资金存 3 年</span>
+            <div class="advantage-card">
+              <span class="advantage-card-icon">✓</span>
+              <span class="advantage-card-text">利息最大化：短期资金用定期，长期资金存 3 年</span>
             </div>
-            <div class="advantage-item">
-              <span class="advantage-icon">✓</span>
-              <span class="advantage-text">操作极简：每季度仅需 1 次操作</span>
+            <div class="advantage-card">
+              <span class="advantage-card-icon">✓</span>
+              <span class="advantage-card-text">操作极简：每季度仅需 1 次操作</span>
             </div>
-            <div class="advantage-item">
-              <span class="advantage-icon">✓</span>
-              <span class="advantage-text">安全冗余：应急金独立保留</span>
+            <div class="advantage-card">
+              <span class="advantage-card-icon">✓</span>
+              <span class="advantage-card-text">安全冗余：应急金独立保留</span>
             </div>
-            <div class="advantage-item">
-              <span class="advantage-icon">✓</span>
-              <span class="advantage-text">可持续循环：自动覆盖未来所有年度</span>
+            <div class="advantage-card">
+              <span class="advantage-card-icon">✓</span>
+              <span class="advantage-card-text">可持续循环：自动覆盖未来所有年度</span>
             </div>
           </div>
-        </div>
-      </div>
-
-      <!-- Tips -->
-      <div v-if="!showResult && totalCash" class="tips-section">
-        <div class="tip-item">
-          <span class="tip-icon">💡</span>
-          <span class="tip-text">每个季度首日（1 月 1 日、4 月 1 日、7 月 1 日、10 月 1 日）资金 100% 到位</span>
-        </div>
-        <div class="tip-item">
-          <span class="tip-icon">💰</span>
-          <span class="tip-text">短期资金使用定期存款，利率高于活期</span>
-        </div>
-        <div class="tip-item">
-          <span class="tip-icon">🔒</span>
-          <span class="tip-text">长期资金存入 3 年定期，享受最高利率</span>
         </div>
       </div>
     </div>
@@ -536,86 +803,53 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.header-section {
-  text-align: center;
-  padding: 32px 0 24px;
+/* Content Grid Layout */
+.content-grid {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 32px;
+  align-items: start;
 }
 
-.app-title {
-  font-size: 36px;
-  font-weight: 700;
-  color: var(--primary-color);
-  margin-bottom: 8px;
+.form-column {
+  position: sticky;
+  top: 100px;
 }
 
-.app-subtitle {
-  font-size: 18px;
-  font-weight: 500;
-  color: var(--secondary-color);
-  margin-bottom: 8px;
-}
-
-.app-desc {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.input-card {
-  padding: 28px 24px;
-}
-
-.expense-section {
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-color);
-}
-
-.expense-items {
+.results-column {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
-.expense-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+/* Form Grid */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px 16px;
 }
 
-.expense-label {
-  font-size: 14px;
-  color: var(--text-primary);
-}
-
-.expense-input {
-  width: 140px;
-}
-
-.expense-input .input-field {
-  text-align: right;
-  padding-right: 32px;
-}
-
+/* Input Hint */
 .input-hint {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 6px;
 }
 
+/* Horizon Selector */
 .horizon-selector {
   display: flex;
-  gap: 12px;
-  margin-top: 12px;
+  gap: 8px;
 }
 
 .horizon-option {
   flex: 1;
-  padding: 12px 0;
+  padding: 10px 0;
   text-align: center;
   background: var(--background-color);
   border: 2px solid var(--border-color);
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-secondary);
   transition: all 0.2s ease;
   cursor: pointer;
@@ -628,50 +862,18 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.expense-summary {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border-color);
-  background: var(--background-color);
-  border-radius: 8px;
-  padding: 20px;
-}
-
-.summary-item {
-  text-align: center;
-  flex: 1;
-}
-
-.summary-item:not(:last-child) {
-  border-right: 1px solid var(--border-color);
-}
-
-.summary-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.summary-value {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--primary-color);
-  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
-}
-
+/* Action Section */
 .action-section {
-  padding: 16px 0;
+  padding-top: 8px;
 }
 
-.action-section-secondary {
+.action-buttons {
   display: flex;
   gap: 16px;
+  margin-top: -16px;
 }
 
-.action-section-secondary .btn-secondary,
-.action-section-secondary .btn-primary {
+.action-buttons button {
   flex: 1;
 }
 
@@ -704,14 +906,14 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
-.amount-label {
+.overview-amount .amount-label {
   display: block;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.8);
   margin-bottom: 6px;
 }
 
-.amount-value {
+.overview-amount .amount-value {
   font-size: 36px;
   font-weight: 700;
   color: #ffffff;
@@ -772,7 +974,7 @@ onMounted(() => {
 .interest-value {
   font-size: 20px;
   font-weight: 700;
-  color: #ff4d4f;
+  color: #FFD700;
   font-family: 'DIN Alternate', 'Roboto Mono', monospace;
 }
 
@@ -787,31 +989,81 @@ onMounted(() => {
   line-height: 1.4;
 }
 
-/* Allocation */
-.allocation-list {
-  display: flex;
-  flex-direction: column;
+/* Allocation Grid */
+.allocation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
 }
 
-.allocation-item {
+.allocation-card {
   background: var(--background-color);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 20px;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.allocation-header {
+.allocation-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+.allocation-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.allocation-type {
-  font-size: 14px;
+.allocation-type-badge {
+  font-size: 13px;
   font-weight: 600;
-  padding: 4px 12px;
-  border-radius: 4px;
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.allocation-card-amount {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--secondary-color);
+  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
+}
+
+.allocation-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.allocation-card-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.allocation-card-value {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.allocation-card-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  max-width: 120px;
+}
+
+.allocation-card-interest {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 13px;
+  font-weight: 600;
+  color: #ff4d4f;
+  text-align: center;
 }
 
 .type-current {
@@ -827,56 +1079,6 @@ onMounted(() => {
 .type-long {
   background: rgba(95, 39, 205, 0.1);
   color: #5F27CD;
-}
-
-.allocation-amount {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--secondary-color);
-  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
-}
-
-.allocation-details {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.detail-row {
-  display: flex;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.detail-label {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  width: 70px;
-}
-
-.detail-value {
-  color: var(--text-primary);
-}
-
-.interest-row {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border-color);
-}
-
-.interest-value {
-  color: #ff4d4f;
-  font-weight: 600;
-}
-
-.disclaimer-row {
-  margin-top: 6px;
-}
-
-.disclaimer-text {
-  font-size: 11px;
-  color: #999;
-  font-style: italic;
 }
 
 /* Timeline */
@@ -922,75 +1124,439 @@ onMounted(() => {
 }
 
 .timeline-date {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-tertiary);
 }
 
 .timeline-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--secondary-color);
 }
 
 .timeline-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.timeline-action {
-  font-size: 12px;
-  color: var(--primary-color);
-}
-
-/* Advantages */
-.advantage-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.advantage-item {
-  display: flex;
-  align-items: flex-start;
-}
-
-.advantage-icon {
-  color: var(--primary-color);
-  font-weight: 600;
-  margin-right: 10px;
-  flex-shrink: 0;
-}
-
-.advantage-text {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.5;
 }
 
-/* Tips */
-.tips-section {
-  padding: 16px 0;
+.timeline-action {
+  font-size: 13px;
+  color: var(--primary-color);
+  font-weight: 500;
+}
+
+/* Advantage Grid */
+.advantage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.advantage-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  background: var(--background-color);
+  border-radius: 8px;
+}
+
+.advantage-card-icon {
+  color: var(--primary-color);
+  font-weight: 600;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.advantage-card-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Tips Card */
+.tips-card {
+  margin-top: 24px;
+}
+
+.tip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .tip-item {
   display: flex;
   align-items: flex-start;
-  margin-bottom: 12px;
-  padding: 12px 16px;
+  gap: 12px;
+  padding: 14px 16px;
   background: rgba(12, 193, 96, 0.05);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .tip-icon {
-  font-size: 16px;
-  margin-right: 10px;
+  font-size: 18px;
   flex-shrink: 0;
 }
 
 .tip-text {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-column {
+    position: static;
+  }
+
+  .allocation-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .allocation-grid,
+  .advantage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-breakdown {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .breakdown-item:not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 12px;
+  }
+}
+
+/* Existing Portfolio Styles */
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.btn-toggle {
+  font-size: 12px;
+  padding: 4px 12px;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-toggle:hover {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: white;
+}
+
+.existing-portfolio-section {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--background-color);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.portfolio-summary {
+  display: flex;
+  gap: 24px;
+  padding: 12px 16px;
+  background: rgba(12, 193, 96, 0.05);
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.summary-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
+}
+
+.summary-value.highlight {
+  color: var(--primary-color);
+}
+
+.deposit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.deposit-item {
+  padding: 12px 16px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.deposit-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.deposit-type {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.deposit-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--primary-color);
+  font-family: 'DIN Alternate', 'Roboto Mono', monospace;
+}
+
+.deposit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-icon {
+  font-size: 12px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: white;
+}
+
+.btn-icon.danger {
+  color: #ff4d4f;
+  border-color: #ff4d4f;
+}
+
+.btn-icon.danger:hover {
+  background: #ff4d4f;
+  color: white;
+}
+
+.deposit-details {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.detail-item {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.maturity-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  background: rgba(12, 193, 96, 0.1);
+  color: var(--primary-color);
+  border-radius: 4px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.maturity-badge.near {
+  background: rgba(255, 159, 67, 0.1);
+  color: #FF9F43;
+}
+
+.interest-earned {
+  color: #ff4d4f;
+  font-weight: 500;
+}
+
+.btn-add-deposit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: 2px dashed var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-add-deposit:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: rgba(12, 193, 96, 0.05);
+}
+
+.plus-icon {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.liquidity-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.liquidity-warning.warning {
+  background: rgba(255, 159, 67, 0.1);
+  color: #FF9F43;
+  border: 1px solid rgba(255, 159, 67, 0.3);
+}
+
+.liquidity-warning.error {
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
+  border: 1px solid rgba(255, 77, 79, 0.3);
+}
+
+.warning-icon {
+  font-size: 16px;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 400px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  font-size: 24px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: var(--background-color);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-input,
+.form-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: white;
+  transition: all 0.2s;
+}
+
+.form-input:focus,
+.form-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(12, 193, 96, 0.1);
+}
+
+.modal-footer {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color);
+}
+
+.modal-footer button {
+  flex: 1;
 }
 </style>
