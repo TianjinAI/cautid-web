@@ -1,0 +1,2 @@
+8f82207 Fix allocation parsing: merge expenses into current deposit account
+6ef1046 Initial commit: WeChat mini-program to web application conversion

@@ -67,6 +67,7 @@ const depositTypeOptions = [
   { value: '3个月定期', label: '3个月定期', defaultRate: 0.70 },
   { value: '6个月定期', label: '6个月定期', defaultRate: 0.95 },
   { value: '1年定期', label: '1年定期', defaultRate: 1.15 },
+  { value: '2 年定期', label: '2 年定期', defaultRate: 1.20 },
   { value: '3年定期', label: '3年定期', defaultRate: 1.30 },
   { value: '5年定期', label: '5年定期', defaultRate: 1.50 }
 ]

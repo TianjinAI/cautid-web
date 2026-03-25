@@ -534,7 +534,7 @@ const openWithdrawalModal = () => {
     return
   }
 
-  const longTermTypes = ['1 年定期', '3 年定期', '5 年定期']
+  const longTermTypes = ['1 年定期', '2 年定期', '3 年定期', '5 年定期']
   withdrawableDeposits.value = planData.allocation
     .filter(d => longTermTypes.includes(d.type) && (d.remainingBalance || d.amount) > 0)
     .map(d => ({

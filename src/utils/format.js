@@ -146,6 +146,8 @@ function getYearsForType(type) {
       return 0.5;
     case '1年定期':
       return 1;
+    case '2 年定期':
+      return 2;
     case '3年定期':
       return 3;
     case '5年定期':
@@ -166,6 +168,8 @@ function getMonthsForType(type) {
       return 6;
     case '1年定期':
       return 12;
+    case '2 年定期':
+      return 24;
     case '3年定期':
       return 36;
     case '5年定期':
@@ -874,6 +878,9 @@ function determineTransitionAllocation(deposit, inputData, interest) {
       } else if (maxTerm === '3年定期' && remaining > 0) {
         allocation.toLongTerm = remaining;
         allocation.longTermType = '3年定期';
+      } else if (maxTerm === '2 年定期' && remaining > 0) {
+        allocation.toLongTerm = remaining;
+        allocation.longTermType = '2 年定期';
       } else if (remaining >= quarterlyExpense) {
         allocation.to1Year = remaining;
       } else if (remaining >= quarterlyExpense / 2) {
@@ -907,6 +914,7 @@ function determineTransitionAllocation(deposit, inputData, interest) {
 function getLongestAllowedTerm(planningHorizon) {
   if (planningHorizon >= 5) return '5年定期';
   if (planningHorizon >= 3) return '3年定期';
+  if (planningHorizon >= 2) return '2 年定期';
   return '1年定期';
 }
 
