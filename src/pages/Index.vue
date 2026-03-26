@@ -300,30 +300,33 @@ const calculateEarnedInterest = (deposit) => {
 
 // Generate plan
 const generatePlanHandler = () => {
-  const totalCashValue = totalCashComputed.value
-  let monthlyExpenseValue = parseFloat(monthlyExpense.value)
+  try {
+    const totalCashValue = totalCashComputed.value
+    let monthlyExpenseValue = parseFloat(monthlyExpense.value)
 
-  if (totalCashValue <= 0) {
-    showToast({ title: '请输入活期存款金额或添加定期存款', icon: 'none' })
-    return
-  }
+    if (totalCashValue <= 0) {
+      showToast({ title: '请输入活期存款金额或添加定期存款', icon: 'none' })
+      return
+    }
 
-  if (!monthlyExpenseValue || monthlyExpenseValue <= 0) {
-    showToast({ title: '请输入月支出金额（房租 + 伙食 + 其他）', icon: 'none' })
-    return
-  }
+    if (!monthlyExpenseValue || monthlyExpenseValue <= 0) {
+      showToast({ title: '请输入月支出金额（房租 + 伙食 + 其他）', icon: 'none' })
+      return
+    }
 
-  let emergencyFundValue = parseFloat(emergencyFund.value) || 5000
+    let emergencyFundValue = parseFloat(emergencyFund.value) || 5000
 
-  const inputData = {
-    totalCash: totalCashValue,
-    monthlyExpense: monthlyExpenseValue,
-    emergencyFund: emergencyFundValue,
-    planningHorizon: parseInt(planningHorizon.value),
-    existingPortfolio: existingPortfolio.value // Add existing portfolio
-  }
+    const inputData = {
+      totalCash: totalCashValue,
+      monthlyExpense: monthlyExpenseValue,
+      emergencyFund: emergencyFundValue,
+      planningHorizon: parseInt(planningHorizon.value),
+      existingPortfolio: existingPortfolio.value // Add existing portfolio
+    }
 
-  const plan = generatePlan(inputData)
+    console.log('=== Generating plan with inputData ===', inputData)
+    const plan = generatePlan(inputData)
+    console.log('=== Plan generated ===', plan)
 
   // Format allocation data
   const formattedAllocation = plan.allocation.map(item => ({
@@ -351,6 +354,10 @@ const generatePlanHandler = () => {
   showProrata.value = shouldShowProrata
 
   showToast({ title: '已生成计划', icon: 'success', duration: 1500 })
+  } catch (error) {
+    console.error('Failed to generate plan:', error)
+    showToast({ title: '生成计划失败：' + error.message, icon: 'none', duration: 5000 })
+  }
 
   // Save form inputs for next time
   storage.setSync('lastInput', {

@@ -1,25 +1,27 @@
-/**
+﻿/**
  * 财务规划工具函数库
  */
 
 // 2026年银行存款利率（参考值）
 const INTEREST_RATES = {
   demand: 0.05,      // 活期
-  threeMonths: 0.70,  // 3个月定期（中小银行平均值）
-  sixMonths: 0.95,   // 6个月定期
-  oneYear: 1.15,     // 1年定期
-  threeYears: 1.30,   // 3年定期
-  fiveYears: 1.50     // 5年定期（添加5年利率）
+  threeMonths: 0.70,  // 3 个月定期（中小银行平均值）
+  sixMonths: 0.95,   // 6 个月定期
+  oneYear: 1.15,     // 1 年定期
+  twoYears: 1.20,    // 2 年定期
+  threeYears: 1.30,   // 3 年定期
+  fiveYears: 1.50     // 5 年定期（添加 5 年利率）
 };
 
 // 存款类型定义（包含期限，单位：月）
 const DEPOSIT_TYPES = [
   { type: '活期存款', duration: 0, rateKey: 'demand' },
-  { type: '3个月定期', duration: 3, rateKey: 'threeMonths' },
-  { type: '6个月定期', duration: 6, rateKey: 'sixMonths' },
-  { type: '1年定期', duration: 12, rateKey: 'oneYear' },
-  { type: '3年定期', duration: 36, rateKey: 'threeYears' },
-  { type: '5年定期', duration: 60, rateKey: 'fiveYears' }
+  { type: '3 个月定期', duration: 3, rateKey: 'threeMonths' },
+  { type: '6 个月定期', duration: 6, rateKey: 'sixMonths' },
+  { type: '1 年定期', duration: 12, rateKey: 'oneYear' },
+  { type: '2 年定期', duration: 24, rateKey: 'twoYears' },
+  { type: '3 年定期', duration: 36, rateKey: 'threeYears' },
+  { type: '5 年定期', duration: 60, rateKey: 'fiveYears' }
 ];
 
 /**
@@ -269,6 +271,7 @@ function generatePlan(inputData) {
 
   // 获取基于规划期限的可用存款类型
   const availableTypes = getAvailableDepositTypes(planningHorizon);
+  const has2Year = availableTypes.some(t => t.type === '2 年定期');
   const has3Year = availableTypes.some(t => t.type === '3年定期');
   const has5Year = availableTypes.some(t => t.type === '5年定期');
   const has1Year = availableTypes.some(t => t.type === '1年定期');
@@ -293,6 +296,7 @@ function generatePlan(inputData) {
   const existing3MonthAmount = existingByType['3个月定期']?.total || 0;
   const existing6MonthAmount = existingByType['6个月定期']?.total || 0;
   const existing1YearAmount = existingByType['1年定期']?.total || 0;
+  const existing2YearAmount = existingByType['2 年定期']?.total || 0;
   const existing3YearAmount = existingByType['3年定期']?.total || 0;
   const existing5YearAmount = existingByType['5年定期']?.total || 0;
 
@@ -403,6 +407,7 @@ function generatePlan(inputData) {
   // 约束：存款期限 <= 规划期限
   let oneYearDeposit = null;
   let threeYearDeposit = null;
+  let twoYearDeposit = null;
   let fiveYearDeposit = null;
 
   // 计算1年定期应存金额：
@@ -438,6 +443,21 @@ function generatePlan(inputData) {
   if (remainingCash > 0 && !has3Year && !has5Year && sixMonthDeposit) {
     sixMonthDeposit.amount += remainingCash;
     sixMonthDeposit.description = `${formatDate(addMonths(currentDate, 6), 'YYYY年MM月DD日')}到期当日：支付第三季度（7-9月）开销${formatAmount(quarterlyExpense)}元，剩余${formatAmount(quarterlyExpense + remainingCash)}元立即转存为3个月定期`;
+    remainingCash = 0;
+  }
+
+  // 2 年定期：只有规划期限 >= 2 年时才有
+  if (has2Year && remainingCash > 0) {
+    twoYearDeposit = {
+      type: '2 年定期',
+      amount: remainingCash,
+      maturityDate: addYears(currentDate, 2),
+      maturityDateStr: formatDate(addYears(currentDate, 2), 'YYYY 年 MM 月 DD 日'),
+      depositDate: new Date().toISOString(),
+      description: `${currentYear + 2}年 1 月 1 日到期，中期增值资金，到期后补充后续年度资金池`,
+      purpose: '中期增值',
+      action: '到期后加入年度资金池'
+    };
     remainingCash = 0;
   }
 
@@ -779,7 +799,7 @@ function generatePlan(inputData) {
       emergencyFund,
       liquidityFund: (currentDeposit ? currentDeposit.amount : 0) + existingDemandAmount,
       shortTermFund: (threeMonthDeposit ? threeMonthDeposit.amount : 0) + (sixMonthDeposit ? sixMonthDeposit.amount : 0) + existing3MonthAmount + existing6MonthAmount,
-      longTermFund: (oneYearDeposit ? oneYearDeposit.amount : 0) + (threeYearDeposit ? threeYearDeposit.amount : 0) + (fiveYearDeposit ? fiveYearDeposit.amount : 0) + existing1YearAmount + existing3YearAmount + existing5YearAmount,
+      longTermFund: (oneYearDeposit ? oneYearDeposit.amount : 0) + (twoYearDeposit ? twoYearDeposit.amount : 0) + (threeYearDeposit ? threeYearDeposit.amount : 0) + (fiveYearDeposit ? fiveYearDeposit.amount : 0) + existing1YearAmount + existing2YearAmount + existing3YearAmount + existing5YearAmount,
       totalProjectedInterest,
       interestRates: INTEREST_RATES,
       existingEarnedInterest
@@ -1740,3 +1760,4 @@ export {
   generateCashFlowTimeline,
   DEPOSIT_TYPES
 };
+

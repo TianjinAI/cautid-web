@@ -1,13 +1,14 @@
 <script setup>
 import { useRouter, useRoute } from 'vue-router'
+import Icon from './components/Icon.vue'
 
 const router = useRouter()
 const route = useRoute()
 
 const navItems = [
-  { path: '/', name: '规划', icon: '💰' },
-  { path: '/execute', name: '执行', icon: '📋' },
-  { path: '/profile', name: '我的', icon: '👤' }
+  { path: '/', name: '规划', icon: 'planning' },
+  { path: '/execute', name: '执行', icon: 'execute' },
+  { path: '/profile', name: '我的', icon: 'profile' }
 ]
 
 const isActive = (path) => route.path === path
@@ -37,7 +38,7 @@ const getPageTitle = () => {
           class="sidebar-item"
           :class="{ active: isActive(item.path) }"
         >
-          <span class="sidebar-item-icon">{{ item.icon }}</span>
+          <Icon :name="item.icon" :size="20" class="sidebar-item-icon" />
           <span>{{ item.name }}</span>
         </router-link>
       </nav>
@@ -51,7 +52,13 @@ const getPageTitle = () => {
     <main class="main-content">
       <!-- Top Header -->
       <header class="top-header">
-        <h1 class="header-title">{{ getPageTitle() }}</h1>
+        <div class="header-left">
+          <nav class="breadcrumb">
+            <span class="breadcrumb-item">财梯</span>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-item active">{{ getPageTitle() }}</span>
+          </nav>
+        </div>
         <div class="header-actions">
           <!-- Optional: Add user menu or other actions here -->
         </div>
@@ -140,12 +147,16 @@ const getPageTitle = () => {
 }
 
 .sidebar-item-icon {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  opacity: 0.8;
+}
+
+.sidebar-item.active .sidebar-item-icon {
+  opacity: 1;
 }
 
 .sidebar-footer {
@@ -181,6 +192,32 @@ const getPageTitle = () => {
   font-size: 20px;
   font-weight: 600;
   color: var(--secondary-color);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.breadcrumb-item {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.breadcrumb-item.active {
+  color: var(--secondary-color);
+  font-weight: 600;
+}
+
+.breadcrumb-separator {
+  color: var(--text-tertiary);
 }
 
 .header-actions {

@@ -1059,8 +1059,8 @@ onMounted(() => {
 /* Layout */
 .execute-layout {
   display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: 24px;
+  grid-template-columns: 360px 1fr;
+  gap: 12px;
 }
 
 /* Allocation Panel (Left) - Sticky */

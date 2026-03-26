@@ -4,6 +4,7 @@ import { formatAmount, formatDate } from '../utils/format'
 import { storage } from '../utils/storage'
 import { showModal, showToast } from '../utils/toast'
 import { useRouter } from 'vue-router'
+import Icon from '../components/Icon.vue'
 
 const router = useRouter()
 
@@ -153,14 +154,16 @@ onMounted(() => {
               <div class="plan-amount">总资产 ¥{{ plan.totalCashFormatted }}</div>
             </div>
             <div class="plan-arrow">
-              <span class="arrow-icon">›</span>
+              <Icon name="arrowRight" :size="20" />
             </div>
           </div>
         </div>
 
         <!-- Empty State -->
         <div v-else class="empty-state">
-          <div class="empty-icon">📊</div>
+          <div class="empty-icon">
+            <Icon name="chart" :size="48" />
+          </div>
           <div class="empty-text">暂无保存的计划</div>
           <div class="empty-desc">点击下方按钮开始您的存款规划</div>
           <button class="btn-primary empty-btn" @click="goToIndex">开始规划</button>
@@ -187,14 +190,16 @@ onMounted(() => {
               <div class="plan-amount">总资产 ¥{{ exec.totalAllocatedFormatted }}</div>
             </div>
             <div class="plan-arrow">
-              <span class="arrow-icon">›</span>
+              <Icon name="arrowRight" :size="20" />
             </div>
           </div>
         </div>
 
         <!-- Empty State -->
         <div v-else class="empty-state">
-          <div class="empty-icon">📋</div>
+          <div class="empty-icon">
+            <Icon name="execute" :size="48" />
+          </div>
           <div class="empty-text">暂无保存的执行</div>
           <div class="empty-desc">在执行页面保存您的执行计划</div>
         </div>
@@ -205,14 +210,22 @@ onMounted(() => {
         <div class="section-title">其他功能</div>
         <div class="function-list">
           <div class="function-item" @click="clearAllData">
-            <span class="function-icon">🗑️</span>
+            <span class="function-icon">
+              <Icon name="trash" :size="20" />
+            </span>
             <span class="function-text">清除所有数据</span>
-            <span class="function-arrow">›</span>
+            <span class="function-arrow">
+              <Icon name="arrowRight" :size="20" />
+            </span>
           </div>
           <div class="function-item" @click="showAbout">
-            <span class="function-icon">ℹ️</span>
+            <span class="function-icon">
+              <Icon name="info" :size="20" />
+            </span>
             <span class="function-text">关于财梯</span>
-            <span class="function-arrow">›</span>
+            <span class="function-arrow">
+              <Icon name="arrowRight" :size="20" />
+            </span>
           </div>
         </div>
       </div>
@@ -229,7 +242,8 @@ onMounted(() => {
 .profile-header {
   padding: 32px 24px;
   background: linear-gradient(135deg, #07C160 0%, #06AD56 100%);
-  margin: -24px -24px 24px -24px;
+  border-radius: 16px;
+  margin-bottom: 24px;
 }
 
 .avatar-section {
@@ -368,10 +382,6 @@ onMounted(() => {
 .plan-arrow {
   display: flex;
   align-items: center;
-}
-
-.arrow-icon {
-  font-size: 20px;
   color: var(--text-tertiary);
 }
 
@@ -381,8 +391,13 @@ onMounted(() => {
 }
 
 .empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .empty-text {
@@ -435,8 +450,13 @@ onMounted(() => {
 }
 
 .function-icon {
-  font-size: 20px;
+  width: 20px;
+  height: 20px;
   margin-right: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .function-text {
@@ -446,7 +466,8 @@ onMounted(() => {
 }
 
 .function-arrow {
-  font-size: 20px;
+  display: flex;
+  align-items: center;
   color: var(--text-tertiary);
 }
 
