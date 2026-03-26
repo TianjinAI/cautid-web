@@ -548,6 +548,7 @@ function generatePlan(inputData) {
   const initial3Month = (threeMonthDeposit ? threeMonthDeposit.amount : 0) + existing3MonthAmount;
   const initial6Month = (sixMonthDeposit ? sixMonthDeposit.amount : 0) + existing6MonthAmount;
   const initial1Year = (oneYearDeposit ? oneYearDeposit.amount : 0) + existing1YearAmount;
+  const initial2Year = (twoYearDeposit ? twoYearDeposit.amount : 0) + existing2YearAmount;
   const initial3Year = (threeYearDeposit ? threeYearDeposit.amount : 0) + existing3YearAmount;
   const initial5Year = (fiveYearDeposit ? fiveYearDeposit.amount : 0) + existing5YearAmount;
 
