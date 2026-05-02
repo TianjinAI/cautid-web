@@ -1,61 +1,74 @@
-# 财梯 Web Application
+# cautid-web
 
-Converted from WeChat mini-program to Vue 3 web application. This financial planning tool helps users calculate deposit strategies with quarterly rollovers and interest calculations.
+`cautid-web` is a Vue 3 deposit planning and execution portal for managing demand cash plus fixed deposits under a debt-first, cashflow-first rule set.
 
-## Features
+The app helps a user:
+- keep enough `活期存款` for `应急金 + 本季度支出`
+- allocate excess cash into fixed deposits by term
+- import an existing deposit portfolio from CSV
+- track execution as deposits mature over time
+- manually adjust `活期` when real life diverges from the ideal plan
 
-- Deposit planning with quarterly rollovers
-- Interest calculation algorithms
-- Early withdrawal penalty tracking
-- Deficit tracking and simulation
-- Progress tracking for execution
+## Core Product Rule
 
-## Project Structure
+`先保证应急金和支出覆盖，再考虑定期收益。`
 
+Operationally:
+- obligations first, yield second
+- `活期目标 = 应急金 + 本季度支出`
+- existing fixed deposits remain real holdings until they mature
+- execution uses the user's confirmed current `活期` balance as the live truth
+
+## Main Pages
+
+- `Index.vue`: planning page
+- `Execute.vue`: execution tracker
+- `Detail.vue`: plan details
+- `Profile.vue`: saved plans
+- `src/utils/format.js`: financial calculation engine
+
+## Run
+
+Install dependencies:
+
+```powershell
+npm install
 ```
-src/
-├── components/
-│   ├── Index.vue      # Home page with form inputs
-│   ├── Detail.vue     # Plan detail display
-│   ├── Execute.vue    # Interactive execution tracker
-│   └── Profile.vue    # Saved plans manager
-└── utils/
-    └── format.js      # Core financial algorithms
+
+Start the dev server:
+
+```powershell
+npm.cmd run dev
 ```
 
-## Setup
+Build for production:
 
-### Option 1: Using Batch File (Windows - Recommended)
+```powershell
+npm.cmd run build
+```
 
-1. Double-click `start_project.bat` in the project folder
-2. The script will automatically:
-   - Install dependencies (if not already installed)
-   - Start the development server
-3. Open your browser to http://localhost:5173
+## Documentation
 
-### Option 2: Manual Setup
+Start here:
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+- [docs/DOCS_INDEX.md](D:/Projects/微信小程序/cautid-web/docs/DOCS_INDEX.md)
+- [docs/USER_MANUAL.md](D:/Projects/微信小程序/cautid-web/docs/USER_MANUAL.md)
+- [docs/DEVELOPER_NOTES.md](D:/Projects/微信小程序/cautid-web/docs/DEVELOPER_NOTES.md)
+- [docs/PROJECT_STATE.md](D:/Projects/微信小程序/cautid-web/docs/PROJECT_STATE.md)
 
-2. Start development server:
-   ```bash
-   npm run dev
-   ```
+## Repository Notes
 
-3. Build for production:
-   ```bash
-   npm run build
-   ```
+- The runnable app is the repository root.
+- The nested `cautid-web/` folder appears to be a stale duplicate tree.
+- Legacy handoff files have been moved into `archive/2026-05-01-recovery/`.
 
-## Scripts
+## Current Status
 
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build locally
+The portal is working, with major recovery fixes already implemented for:
+- planning-to-execution payload consistency
+- CSV import for the real fixed-deposit file format
+- current-holdings tracking and rollback
+- quarter-reserve execution flow with confirmed `活期`
+- execution-side liquidity warning
 
-## Original Conversion Details
-
-This project was converted from a WeChat mini-program to a web application while preserving all core functionality and business logic.
+Known remaining work is documented in [docs/PROJECT_STATE.md](D:/Projects/微信小程序/cautid-web/docs/PROJECT_STATE.md).

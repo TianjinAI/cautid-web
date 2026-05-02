@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+dev-server.log
+dev-server.err.log
+git_*_output.txt
+src/utils/test_write.txt
 
 # Editor directories and files
 .vscode/*

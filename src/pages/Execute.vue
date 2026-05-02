@@ -1,16 +1,19 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, onMounted } from 'vue'
-import { formatAmount, formatDate } from '../utils/format'
+import { formatAmount, formatDate, normalizeDepositType } from '../utils/format'
 import { storage as localStorage } from '../utils/storage'
 import { showToast } from '../utils/toast'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
+const loadedExecutionPlan = ref(null)
+
 // State
 const groupedMaturities = ref([])
 const maturityHistory = ref([])
 const currentDeposits = ref([])
+const targetDeposits = ref([])
 const totalDepositAmount = ref('0')
 const totalProjectedInterest = ref(0)
 const planningHorizon = ref(1)
@@ -19,6 +22,8 @@ const completedCount = ref(0)
 const totalCount = ref(0)
 const hasPlan = ref(false)
 const demandDepositBalance = ref('0')
+const editingDemandBalance = ref(false)
+const demandDepositDraft = ref('')
 const activeTab = ref('upcoming') // 'upcoming' | 'history' | 'allocation'
 const expandedGroups = ref(new Set())
 
@@ -32,6 +37,8 @@ const withdrawableDeposits = ref([])
 const showCompletionModal = ref(false)
 const selectedMaturity = ref(null)
 const actualInterestInput = ref('')
+const currentDemandBalanceInput = ref('')
+const completionError = ref('')
 
 // Computed
 const progressPercent = computed(() => {
@@ -56,6 +63,19 @@ const daysUntilNext = computed(() => {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 })
 
+const debugShape = (value) => {
+  if (value === null || value === undefined) return 'none'
+  if (Array.isArray(value)) return `array(${value.length})`
+  if (typeof value === 'object') return `obj(${Object.keys(value).length})`
+  return typeof value
+}
+
+const debugStatusLine = computed(() => {
+  return `executionPlan:${debugShape(loadedExecutionPlan.value)} currentHoldings:${debugShape(currentDeposits.value)} transitionPlan:${debugShape(loadedExecutionPlan.value?.transitionPlan)}`
+})
+
+const standardDepositTypes = ['活期存款', '3个月定期', '6个月定期', '1年定期', '2年定期', '3年定期', '5年定期']
+
 // Parse date safely
 const parseDate = (dateStr) => {
   if (!dateStr) return new Date(0)
@@ -78,21 +98,161 @@ const toggleGroup = (groupKey) => {
 // Check if group is expanded
 const isExpanded = (groupKey) => expandedGroups.value.has(groupKey)
 
+const isOperationalEntry = (item) => {
+  return item.depositType === '初始' || item.action === '支取支出'
+}
+
+const isMaturityEntry = (item) => {
+  return !isOperationalEntry(item) && String(item.action || '').includes('到期')
+}
+
+const buildTransitionActionDetails = (item) => {
+  if (item.actionDetails) return item.actionDetails
+
+  const allocation = item.allocation || {}
+  const lines = [
+    '【到期处理】',
+    `• 本金: ¥${formatAmount(item.amount || 0)}`,
+    `• 利息: ¥${formatAmount(item.projectedInterest || 0)}`,
+    `• 本息合计: ¥${formatAmount(item.totalWithInterest || ((item.amount || 0) + (item.projectedInterest || 0)))}`,
+    '',
+    '【资金分配】'
+  ]
+
+  if (allocation.toDemand > 0) lines.push(`• 活期存款: ¥${formatAmount(allocation.toDemand)}`)
+  if (allocation.to3Month > 0) lines.push(`• 3个月定期: ¥${formatAmount(allocation.to3Month)}`)
+  if (allocation.to6Month > 0) lines.push(`• 6个月定期: ¥${formatAmount(allocation.to6Month)}`)
+  if (allocation.to1Year > 0) lines.push(`• 1年定期: ¥${formatAmount(allocation.to1Year)}`)
+  if (allocation.toLongTerm > 0) lines.push(`• ${allocation.longTermType || '长期定期'}: ¥${formatAmount(allocation.toLongTerm)}`)
+
+  return lines.join('\n')
+}
+
+const initialRebalanceRows = computed(() => {
+  if (initialRebalanceDone.value) return []
+  if (!targetDeposits.value.length || !currentDeposits.value.length) return []
+
+  const currentMap = new Map(currentDeposits.value.map(dep => [normalizeDepositType(dep.type), dep]))
+  const targetMap = new Map(targetDeposits.value.map(dep => [normalizeDepositType(dep.type), dep]))
+  const allTypes = Array.from(new Set([...currentMap.keys(), ...targetMap.keys()]))
+
+  return allTypes
+    .map(type => {
+      const current = currentMap.get(type)
+      const target = targetMap.get(type)
+      const currentAmount = current ? Number(current.remainingBalance ?? current.amount ?? 0) : 0
+      const targetAmount = target ? Number(target.remainingBalance ?? target.amount ?? 0) : 0
+      const delta = targetAmount - currentAmount
+
+      return {
+        type,
+        currentAmount,
+        targetAmount,
+        delta,
+        currentFormatted: formatAmount(currentAmount),
+        targetFormatted: formatAmount(targetAmount),
+        deltaFormatted: formatAmount(Math.abs(delta)),
+        direction: delta > 0 ? 'increase' : delta < 0 ? 'decrease' : 'same'
+      }
+    })
+    .filter(row => Math.abs(row.delta) > 0.009)
+    .sort((a, b) => {
+      if (a.type === '活期存款') return -1
+      if (b.type === '活期存款') return 1
+      return standardDepositTypes.indexOf(a.type) - standardDepositTypes.indexOf(b.type)
+    })
+})
+
+const initialRebalanceCompleted = computed(() => {
+  return initialRebalanceRows.value.length === 0
+})
+
+const initialRebalanceDone = computed(() => Boolean(loadedExecutionPlan.value?.initialRebalanceCompletedAt))
+
+const executionExpenseBreakdown = computed(() => {
+  const plan = loadedExecutionPlan.value || {}
+  const housing = parseFloat(plan.housingExpense) || 0
+  const food = parseFloat(plan.foodExpense) || 0
+  const other = parseFloat(plan.otherExpense) || 0
+  const monthly = parseFloat(plan.monthlyExpense) || (housing + food + other)
+  const emergency = parseFloat(plan.emergencyFund) || 0
+  const quarterTotal = monthly * 3
+  return {
+    housing,
+    food,
+    other,
+    monthly,
+    emergency,
+    quarterTotal,
+    reserveTarget: emergency + quarterTotal
+  }
+})
+
+const executionLiquidityWarning = computed(() => {
+  const currentDemand = currentDeposits.value.find(d => d.type === '活期存款')
+  const demandBalance = currentDemand ? Number(currentDemand.remainingBalance ?? currentDemand.amount ?? 0) : 0
+  const emergency = executionExpenseBreakdown.value.emergency
+  const quarterTotal = executionExpenseBreakdown.value.quarterTotal
+  const reserveTarget = executionExpenseBreakdown.value.reserveTarget
+  const availableForQuarter = demandBalance - emergency
+
+  if (availableForQuarter < quarterTotal) {
+    return {
+      shortfall: quarterTotal - availableForQuarter,
+      demandBalance,
+      emergency,
+      quarterTotal,
+      reserveTarget
+    }
+  }
+
+  return null
+})
+
+const normalizeAllocationList = (rawAllocation = []) => {
+  const typeMap = new Map()
+
+  rawAllocation.forEach(dep => {
+    const normalizedType = normalizeDepositType(dep.type)
+    if (typeMap.has(normalizedType)) {
+      const existing = typeMap.get(normalizedType)
+      existing.amount = (existing.amount || 0) + (dep.amount || 0)
+      if (dep.remainingBalance !== undefined) {
+        existing.remainingBalance = (existing.remainingBalance || 0) + dep.remainingBalance
+      }
+    } else {
+      typeMap.set(normalizedType, {
+        ...dep,
+        type: normalizedType,
+        remainingBalance: dep.remainingBalance !== undefined ? dep.remainingBalance : dep.amount
+      })
+    }
+  })
+
+  return standardDepositTypes
+    .map(type => typeMap.get(type))
+    .filter(Boolean)
+}
+
 // Load execution plan
 const loadExecutionPlan = () => {
   const planData = localStorage.getSync('executionPlan')
 
   if (!planData || !planData.executionList || planData.executionList.length === 0) {
     hasPlan.value = false
+    loadedExecutionPlan.value = null
     currentDeposits.value = []
-    groupedMaturities.value = []
+    targetDeposits.value = []
+
     maturityHistory.value = []
     totalDepositAmount.value = '0'
     return
   }
 
+  loadedExecutionPlan.value = planData
   planningHorizon.value = planData.planningHorizon || 1
-  const executionList = planData.executionList || []
+  const executionList = (planData.executionList || []).filter(item => !item.isExisting)
+  const transitionPlan = planData.transitionPlan || []
 
   // Group maturities by year+quarter
   const groups = new Map()
@@ -101,8 +261,44 @@ const loadExecutionPlan = () => {
   let completed = 0
   let totalProjected = 0
 
+  const pushMaturity = (maturity, source) => {
+    maturity.source = source
+    maturity.sourceLabel = source === 'existing' ? '现有定期到期' : '新计划滚动'
+
+    if (maturity.isCompleted) {
+      history.push(maturity)
+      completed++
+      if (maturity.actualInterest) totalInterest += parseFloat(maturity.actualInterest)
+      return
+    }
+
+    const dateLabel = maturity.dateDisplay || `Year ${maturity.year} - Q${maturity.quarter}`
+    const groupKey = `${source}:${dateLabel}`
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        key: groupKey,
+        dateLabel,
+        source,
+        sourceLabel: maturity.sourceLabel,
+        year: maturity.year,
+        quarter: maturity.quarter,
+        date: maturity.date,
+        items: [],
+        totalPrincipal: 0,
+        totalInterest: 0
+      })
+    }
+
+    const group = groups.get(groupKey)
+    group.items.push(maturity)
+    group.totalPrincipal += maturity.amount
+    group.totalInterest += (maturity.projectedInterest || 0)
+    totalProjected += (maturity.projectedInterest || 0)
+  }
+
   executionList.forEach((item) => {
     if (item.year === 0 && !item.maturityDate) return
+    if (isOperationalEntry(item)) return
 
     const maturity = {
       id: `${item.year}-${item.quarter || 0}-${item.depositType || 'unknown'}-${Math.random().toString(36).substr(2, 9)}`,
@@ -116,34 +312,39 @@ const loadExecutionPlan = () => {
       projectedInterest: item.projectedInterest || 0,
       projectedInterestFormatted: formatAmount(item.projectedInterest || 0),
       actionDetails: item.actionDetails || '取出本息，按需分配',
+      action: item.action || '',
+      title: item.title || '',
+      description: item.description || '',
       isCompleted: item.isCompleted || false,
       actualInterest: item.actualInterest || '',
       actualInterestFormatted: item.actualInterest ? formatAmount(item.actualInterest) : ''
     }
 
-    if (maturity.isCompleted) {
-      history.push(maturity)
-      completed++
-      if (item.actualInterest) totalInterest += parseFloat(item.actualInterest)
-    } else {
-      const groupKey = `Year ${maturity.year} - Q${maturity.quarter}`
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, {
-          key: groupKey,
-          year: maturity.year,
-          quarter: maturity.quarter,
-          date: maturity.date,
-          items: [],
-          totalPrincipal: 0,
-          totalInterest: 0
-        })
-      }
-      const group = groups.get(groupKey)
-      group.items.push(maturity)
-      group.totalPrincipal += maturity.amount
-      group.totalInterest += (maturity.projectedInterest || 0)
-      totalProjected += (maturity.projectedInterest || 0)
+    pushMaturity(maturity, 'planned')
+  })
+
+  transitionPlan.forEach((item, index) => {
+    const maturity = {
+      id: item.id || `transition-${index}`,
+      year: parseDate(item.maturityDate).getFullYear(),
+      quarter: Math.ceil((parseDate(item.maturityDate).getMonth() + 1) / 3),
+      date: item.maturityDate,
+      dateDisplay: item.maturityDateStr,
+      depositType: item.type || '定期存款',
+      amount: item.amount || 0,
+      amountFormatted: formatAmount(item.amount || 0),
+      projectedInterest: item.projectedInterest || 0,
+      projectedInterestFormatted: formatAmount(item.projectedInterest || 0),
+      actionDetails: buildTransitionActionDetails(item),
+      action: '到期重新分配',
+      title: `${item.type}到期`,
+      description: '现有存款到期',
+      isCompleted: item.status === 'completed',
+      actualInterest: item.actualInterest || '',
+      actualInterestFormatted: item.actualInterest ? formatAmount(item.actualInterest) : ''
     }
+
+    pushMaturity(maturity, 'existing')
   })
 
   // Convert groups to array and sort by date
@@ -168,7 +369,7 @@ const loadExecutionPlan = () => {
   maturityHistory.value = history
 
   // Process current deposits - use remainingBalance if available
-  let allocation = planData.allocation || []
+  let allocation = normalizeAllocationList(planData.allocation || planData.currentStateAllocation || [])
   console.log('=== LOAD EXECUTION PLAN ===')
   console.log('Raw allocation from storage:', allocation.map(d => ({ type: d.type, amount: d.amount, remainingBalance: d.remainingBalance })))
 
@@ -176,10 +377,11 @@ const loadExecutionPlan = () => {
   // Use the first occurrence's values, sum amounts for duplicates
   const typeMap = new Map()
   allocation.forEach(dep => {
-    if (typeMap.has(dep.type)) {
+    const normalizedType = normalizeDepositType(dep.type)
+    if (typeMap.has(normalizedType)) {
       // Merge with existing - but DON'T use Math.max for remainingBalance
       // remainingBalance should reflect the actual current state
-      const existing = typeMap.get(dep.type)
+      const existing = typeMap.get(normalizedType)
       // Sum the amounts for display purposes
       existing.amount = (existing.amount || 0) + (dep.amount || 0)
       // Use the actual remainingBalance from saved data (not max)
@@ -188,8 +390,9 @@ const loadExecutionPlan = () => {
       }
     } else {
       // Add new - use remainingBalance if available, otherwise amount
-      typeMap.set(dep.type, {
+      typeMap.set(normalizedType, {
         ...dep,
+        type: normalizedType,
         remainingBalance: dep.remainingBalance !== undefined ? dep.remainingBalance : dep.amount
       })
     }
@@ -197,11 +400,18 @@ const loadExecutionPlan = () => {
 
   // Convert back to array in standard order
   const standardTypes = ['活期存款', '3个月定期', '6个月定期', '1年定期', '3年定期', '5年定期']
-  allocation = standardTypes
+  allocation = standardDepositTypes
     .map(type => typeMap.get(type))
     .filter(Boolean)
 
   currentDeposits.value = allocation.map(dep => ({
+    ...dep,
+    amountFormatted: formatAmount(dep.amount),
+    remainingBalanceFormatted: formatAmount(dep.remainingBalance !== undefined ? dep.remainingBalance : dep.amount),
+    typeClass: getTypeClass(dep.type)
+  }))
+
+  targetDeposits.value = normalizeAllocationList(planData.targetAllocation || []).map(dep => ({
     ...dep,
     amountFormatted: formatAmount(dep.amount),
     remainingBalanceFormatted: formatAmount(dep.remainingBalance !== undefined ? dep.remainingBalance : dep.amount),
@@ -219,6 +429,9 @@ const loadExecutionPlan = () => {
   // Load demand deposit balance from current deposits
   const currentDeposit = currentDeposits.value.find(d => d.type === '活期存款')
   demandDepositBalance.value = currentDeposit ? currentDeposit.remainingBalanceFormatted : '0'
+  if (!editingDemandBalance.value) {
+    demandDepositDraft.value = currentDeposit ? String(currentDeposit.remainingBalance ?? currentDeposit.amount ?? 0) : '0'
+  }
 
   hasPlan.value = true
 
@@ -331,6 +544,162 @@ const parseAllocation = (actionDetails) => {
   return mergedAllocations
 }
 
+const mapDisplayAllocationType = (typeDesc) => {
+  const normalized = normalizeDepositType(typeDesc)
+  if (!normalized) return null
+  if (normalized.includes('支出')) return null
+  if (normalized.includes('活期')) return '活期存款'
+  if (normalized.includes('3个月')) return '3个月定期'
+  if (normalized.includes('6个月')) return '6个月定期'
+  if (normalized.includes('1年')) return '1年定期'
+  if (normalized.includes('2年')) return '2年定期'
+  if (normalized.includes('3年')) return '3年定期'
+  if (normalized.includes('5年')) return '5年定期'
+  return typeDesc
+}
+
+const parseActionAllocations = (actionDetails) => {
+  if (!actionDetails) return []
+
+  const allocations = []
+  const lines = actionDetails.split('\n')
+  let inAllocationSection = false
+
+  for (const line of lines) {
+    if (line.includes('【资金分配】') || line.includes('【资金用途】')) {
+      inAllocationSection = true
+      continue
+    }
+
+    if (!inAllocationSection) continue
+
+    const match = line.match(/[•-]\s*([^:：]+)[:：]\s*[¥￥]?([\d,]+(?:\.\d{2})?)/)
+    if (!match) continue
+
+    const fullType = match[1].trim()
+    const typeRaw = fullType.split('(')[0].trim()
+    const noteMatch = fullType.match(/\(([^)]+)\)/)
+    const mappedType = mapDisplayAllocationType(typeRaw)
+
+    allocations.push({
+      type: mappedType || '支出',
+      displayType: fullType,
+      amount: match[2].trim(),
+      note: noteMatch ? noteMatch[1] : '',
+      icon: getAllocationIcon(mappedType || '支出'),
+      isExpense: !mappedType
+    })
+  }
+
+  const mergedAllocations = []
+  const typeMap = new Map()
+  for (const alloc of allocations) {
+    const key = alloc.type || alloc.displayType
+    if (typeMap.has(key)) {
+      const existing = typeMap.get(key)
+      const totalAmount = parseFloat(existing.amount.replace(/,/g, '')) + parseFloat(alloc.amount.replace(/,/g, ''))
+      existing.amount = totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      if (alloc.note && !existing.note.includes(alloc.note)) {
+        existing.note = existing.note ? `${existing.note} + ${alloc.note}` : alloc.note
+      }
+    } else {
+      typeMap.set(key, { ...alloc })
+      mergedAllocations.push(typeMap.get(key))
+    }
+  }
+
+  return mergedAllocations
+}
+
+const shouldShowAllocationBreakdown = (maturity) => isMaturityEntry(maturity) && parseActionAllocations(maturity.actionDetails).length > 0
+
+const parseMoney = (value) => {
+  if (value === null || value === undefined || value === '') return 0
+  return parseFloat(String(value).replace(/,/g, '')) || 0
+}
+
+const cloneAllocationState = (allocation = []) => JSON.parse(JSON.stringify(allocation))
+
+const getDemandDeposit = (allocation = []) => allocation.find(d => d.type === '活期存款')
+
+const getCompletionAllocationPreview = (maturity = selectedMaturity.value, actualInterestValue = actualInterestInput.value, currentDemandValue = currentDemandBalanceInput.value) => {
+  if (!maturity) return { allocations: [], totalAvailable: 0, reserveGapBefore: 0, reserveTarget: executionExpenseBreakdown.value.reserveTarget }
+
+  const totalAvailable = parseMoney(maturity.amount) + parseMoney(actualInterestValue)
+  const confirmedDemandBefore = parseMoney(currentDemandValue)
+  const reserveTarget = executionExpenseBreakdown.value.reserveTarget
+  const reserveGapBefore = Math.max(0, reserveTarget - confirmedDemandBefore)
+  const plannedAllocations = parseActionAllocations(maturity.actionDetails)
+  const nonDemandAllocations = plannedAllocations
+    .filter(alloc => alloc.type && alloc.type !== '活期存款' && !alloc.isExpense)
+    .map(alloc => ({
+      ...alloc,
+      parsedAmount: parseMoney(alloc.amount)
+    }))
+
+  let remaining = totalAvailable
+  const allocations = []
+
+  const toDemand = Math.min(remaining, reserveGapBefore)
+  if (toDemand > 0) {
+    allocations.push({
+      type: '活期存款',
+      displayType: '活期存款',
+      amount: toDemand,
+      amountFormatted: formatAmount(toDemand),
+      note: '补足本季度储备',
+      icon: getAllocationIcon('活期存款')
+    })
+    remaining -= toDemand
+  }
+
+  nonDemandAllocations.forEach((alloc, index) => {
+    if (remaining <= 0) return
+    const isLast = index === nonDemandAllocations.length - 1
+    const amount = isLast ? remaining : Math.min(remaining, alloc.parsedAmount)
+    if (amount <= 0) return
+    allocations.push({
+      type: alloc.type,
+      displayType: alloc.displayType,
+      amount,
+      amountFormatted: formatAmount(amount),
+      note: alloc.note || '',
+      icon: alloc.icon
+    })
+    remaining -= amount
+  })
+
+  if (remaining > 0) {
+    const currentAlloc = allocations.find(alloc => alloc.type === '活期存款')
+    if (currentAlloc) {
+      currentAlloc.amount += remaining
+      currentAlloc.amountFormatted = formatAmount(currentAlloc.amount)
+      currentAlloc.note = currentAlloc.note ? `${currentAlloc.note} + 剩余资金` : '剩余资金'
+    } else {
+      allocations.push({
+        type: '活期存款',
+        displayType: '活期存款',
+        amount: remaining,
+        amountFormatted: formatAmount(remaining),
+        note: '剩余资金',
+        icon: getAllocationIcon('活期存款')
+      })
+    }
+    remaining = 0
+  }
+
+  return {
+    allocations,
+    totalAvailable,
+    confirmedDemandBefore,
+    reserveTarget,
+    reserveGapBefore,
+    reserveSatisfiedBefore: reserveGapBefore <= 0
+  }
+}
+
+const completionPreview = computed(() => getCompletionAllocationPreview())
+
 // Get icon for allocation type
 const getAllocationIcon = (type) => {
   if (type.includes('活期')) return '💵'
@@ -343,7 +712,7 @@ const getAllocationIcon = (type) => {
 }
 const getTypeClass = (type) => {
   if (type === '活期存款') return 'type-current'
-  if (type?.includes('1年') || type?.includes('3年') || type?.includes('5年')) return 'type-long'
+  if (type?.includes('1年') || type?.includes('2年') || type?.includes('3年') || type?.includes('5年')) return 'type-long'
   return 'type-short'
 }
 
@@ -397,98 +766,163 @@ const saveActualInterest = (maturity) => {
 const markComplete = (maturity) => {
   selectedMaturity.value = maturity
   actualInterestInput.value = maturity.actualInterest || ''
+  const currentDemand = currentDeposits.value.find(d => d.type === '活期存款')
+  currentDemandBalanceInput.value = currentDemand ? String(currentDemand.remainingBalance ?? currentDemand.amount ?? '') : ''
+  completionError.value = ''
   showCompletionModal.value = true
 }
 
-// Apply allocation updates to current deposits
-const applyAllocationUpdate = (maturity, actualInterest) => {
-  console.log('=== ALLOCATION UPDATE ===')
-  console.log('Maturity:', maturity.depositType, 'Amount:', maturity.amount)
-  console.log('actionDetails:', maturity.actionDetails)
+const closeCompletionModal = () => {
+  showCompletionModal.value = false
+  completionError.value = ''
+}
 
+const ensureDepositBucket = (allocation, type) => {
+  let deposit = allocation.find(d => d.type === type)
+  if (!deposit) {
+    deposit = {
+      type,
+      amount: 0,
+      originalAmount: 0,
+      remainingBalance: 0,
+      status: 'active'
+    }
+    allocation.push(deposit)
+  }
+  if (deposit.remainingBalance === undefined) {
+    deposit.remainingBalance = deposit.amount || 0
+  }
+  return deposit
+}
+
+const applyCompletionAllocation = (planData, maturity, preview) => {
+  if (!planData || !planData.allocation) return null
+
+  const snapshotBefore = cloneAllocationState(planData.allocation)
+  const allocation = planData.allocation
+  const demandDeposit = ensureDepositBucket(allocation, '活期存款')
+  demandDeposit.remainingBalance = preview.confirmedDemandBefore
+
+  const sourceDeposit = allocation.find(d => d.type === maturity.depositType)
+  if (sourceDeposit) {
+    const oldBalance = sourceDeposit.remainingBalance !== undefined ? sourceDeposit.remainingBalance : sourceDeposit.amount
+    sourceDeposit.remainingBalance = Math.max(0, oldBalance - parseMoney(maturity.amount))
+  }
+
+  preview.allocations.forEach(alloc => {
+    if (!alloc.type) return
+    const targetDeposit = ensureDepositBucket(allocation, alloc.type)
+    const oldBalance = targetDeposit.remainingBalance !== undefined ? targetDeposit.remainingBalance : targetDeposit.amount
+    targetDeposit.remainingBalance = oldBalance + alloc.amount
+  })
+
+  const snapshotAfter = cloneAllocationState(allocation)
+  return {
+    confirmedDemandBalanceBefore: preview.confirmedDemandBefore,
+    allocationApplied: preview.allocations.map(alloc => ({
+      type: alloc.type,
+      displayType: alloc.displayType,
+      amount: alloc.amount,
+      note: alloc.note || ''
+    })),
+    snapshotBefore,
+    snapshotAfter
+  }
+}
+
+const completeInitialRebalance = () => {
   const planData = localStorage.getSync('executionPlan')
-  if (!planData || !planData.allocation) {
-    console.log('No plan data found')
+  if (!planData || !planData.targetAllocation) {
+    showToast({ title: '没有可执行的初始调仓', icon: 'none' })
     return
   }
 
-  const allocation = planData.allocation
-  const allocations = parseAllocation(maturity.actionDetails)
-  console.log('Parsed allocations:', allocations)
-  console.log('Current allocation BEFORE update:', JSON.stringify(allocation.map(d => ({ type: d.type, amount: d.amount, remainingBalance: d.remainingBalance }))))
-
-  // 1. Subtract matured amount from source deposit
-  console.log('Looking for source deposit with type:', maturity.depositType)
-  console.log('Available deposit types:', allocation.map(d => d.type))
-  const sourceDeposit = allocation.find(d => d.type === maturity.depositType)
-  if (sourceDeposit) {
-    const maturedAmount = parseFloat(maturity.amount)
-    const oldBalance = sourceDeposit.remainingBalance !== undefined ? sourceDeposit.remainingBalance : sourceDeposit.amount
-    console.log(`Found source: ${maturity.depositType}, oldBalance: ${oldBalance}, maturedAmount: ${maturedAmount}`)
-    sourceDeposit.remainingBalance = oldBalance - maturedAmount
-    if (sourceDeposit.remainingBalance < 0) sourceDeposit.remainingBalance = 0
-    console.log(`Source ${maturity.depositType} UPDATED: remainingBalance now = ${sourceDeposit.remainingBalance}`)
-  } else {
-    console.log('WARNING: Source deposit not found:', maturity.depositType)
-    console.log('Trying to find partial match...')
-    // Try to find by partial match
-    const partialMatch = allocation.find(d => d.type.includes('3个月') && maturity.depositType.includes('3个月'))
-    if (partialMatch) {
-      console.log('Found partial match:', partialMatch.type)
-    }
-  }
-
-  // 2. Add allocated amounts to target deposits
-  // If no allocations parsed (e.g., "全部转入活期账户"), default to adding to 活期存款
-  if (allocations.length === 0) {
-    console.log('No allocations parsed - defaulting to 活期存款')
-    const totalAmount = parseFloat(maturity.amount) + parseFloat(actualInterest || 0)
-    const currentDeposit = allocation.find(d => d.type === '活期存款')
-    if (currentDeposit) {
-      const oldBalance = currentDeposit.remainingBalance !== undefined ? currentDeposit.remainingBalance : currentDeposit.amount
-      currentDeposit.remainingBalance = oldBalance + totalAmount
-      console.log(`Default to 活期存款: ${oldBalance} -> ${currentDeposit.remainingBalance} (added ${totalAmount})`)
-    }
-  } else {
-    // Process parsed allocations (expenses are now merged into 活期存款)
-    allocations.forEach(alloc => {
-      const amount = parseFloat(alloc.amount.replace(/,/g, ''))
-      // Skip if type is null
-      if (!alloc.type) {
-        console.log('Skipping allocation with no type:', alloc.displayType || 'unknown')
-        return
-      }
-      const targetDeposit = allocation.find(d => d.type === alloc.type)
-      if (targetDeposit) {
-        // CRITICAL FIX: Use !== undefined check, not || operator (0 is falsy!)
-        const oldBalance = targetDeposit.remainingBalance !== undefined ? targetDeposit.remainingBalance : targetDeposit.amount
-        targetDeposit.remainingBalance = oldBalance + amount
-        console.log(`Target ${alloc.type}: ${oldBalance} -> ${targetDeposit.remainingBalance} (added ${amount})`)
-      } else {
-        console.log('WARNING: Target deposit not found for mapped type:', alloc.type, '(original:', alloc.displayType + ')')
-      }
-    })
-  }
-
-  // 3. Add actual interest to 活期存款 (in addition to any interest already included)
-  if (actualInterest && !allocations.some(a => a.type === '活期存款' && a.note?.includes('利息'))) {
-    const interestAmount = parseFloat(actualInterest)
-    const currentDeposit = allocation.find(d => d.type === '活期存款')
-    if (currentDeposit) {
-      const oldBalance = currentDeposit.remainingBalance !== undefined ? currentDeposit.remainingBalance : currentDeposit.amount
-      currentDeposit.remainingBalance = oldBalance + interestAmount
-      console.log(`Interest to 活期: ${oldBalance} -> ${currentDeposit.remainingBalance} (added ${interestAmount})`)
-    }
-  }
-
-  console.log('Allocation AFTER all updates:', JSON.stringify(allocation.map(d => ({ type: d.type, amount: d.amount, remainingBalance: d.remainingBalance }))))
-
-  // 4. Save and refresh
+  planData.allocation = planData.targetAllocation.map(item => ({
+    ...item,
+    amount: item.amount,
+    originalAmount: item.originalAmount ?? item.amount,
+    remainingBalance: item.remainingBalance !== undefined ? item.remainingBalance : item.amount,
+    status: 'active'
+  }))
+  planData.initialRebalanceCompletedAt = new Date().toISOString()
   localStorage.setSync('executionPlan', planData)
-  console.log('=== SAVED TO LOCALSTORAGE ===')
-  const verifyData = localStorage.getSync('executionPlan')
-  console.log('Verification - allocation after save:', verifyData.allocation.map(d => ({ type: d.type, remainingBalance: d.remainingBalance || d.amount })))
-  showToast({ title: '资金分配已更新', icon: 'success' })
+  loadExecutionPlan()
+  showToast({ title: '初始调仓已完成', icon: 'success' })
+}
+
+const rollbackInitialRebalance = () => {
+  const planData = localStorage.getSync('executionPlan')
+  if (!planData || !planData.currentStateAllocation) {
+    showToast({ title: '没有可折返的初始调仓', icon: 'none' })
+    return
+  }
+
+  planData.allocation = planData.currentStateAllocation.map(item => ({
+    ...item,
+    amount: item.amount,
+    originalAmount: item.originalAmount ?? item.amount,
+    remainingBalance: item.remainingBalance !== undefined ? item.remainingBalance : item.amount,
+    status: 'active'
+  }))
+  delete planData.initialRebalanceCompletedAt
+  localStorage.setSync('executionPlan', planData)
+  loadExecutionPlan()
+  showToast({ title: '初始调仓已折返', icon: 'success' })
+}
+
+const rollbackCompletion = (maturity) => {
+  const planData = localStorage.getSync('executionPlan')
+  if (!planData || !planData.allocation) return
+
+  let updated = false
+
+  if (maturity.source === 'existing') {
+    const transitionItem = (planData.transitionPlan || []).find(item =>
+      String(item.id) === String(maturity.id) ||
+      (item.type === maturity.depositType && item.maturityDate === maturity.date)
+    )
+
+    if (transitionItem) {
+      if (transitionItem.snapshotBefore) {
+        planData.allocation = cloneAllocationState(transitionItem.snapshotBefore)
+      }
+      transitionItem.status = 'pending'
+      delete transitionItem.actualInterest
+      delete transitionItem.confirmedDemandBalanceBefore
+      delete transitionItem.allocationApplied
+      delete transitionItem.snapshotBefore
+      delete transitionItem.snapshotAfter
+      updated = true
+    }
+  } else {
+    const execItem = planData.executionList.find(e =>
+      e.year === maturity.year &&
+      e.quarter === maturity.quarter &&
+      e.depositType === maturity.depositType
+    )
+
+    if (execItem) {
+      if (execItem.snapshotBefore) {
+        planData.allocation = cloneAllocationState(execItem.snapshotBefore)
+      }
+      execItem.isCompleted = false
+      execItem.actualInterest = ''
+      delete execItem.confirmedDemandBalanceBefore
+      delete execItem.allocationApplied
+      delete execItem.snapshotBefore
+      delete execItem.snapshotAfter
+      updated = true
+    }
+  }
+
+  if (!updated) {
+    showToast({ title: '未找到可折返的记录', icon: 'none' })
+    return
+  }
+
+  localStorage.setSync('executionPlan', planData)
+  loadExecutionPlan()
+  showToast({ title: '已折返，资金状态已回退', icon: 'success' })
 }
 
 // Confirm completion with allocation update
@@ -498,27 +932,64 @@ const confirmCompletion = () => {
   const planData = localStorage.getSync('executionPlan')
   if (!planData) return
 
-  // Find and update the execution item
-  const execItem = planData.executionList.find(e =>
-    e.year === selectedMaturity.value.year &&
-    e.quarter === selectedMaturity.value.quarter &&
-    e.depositType === selectedMaturity.value.depositType
-  )
-
-  if (execItem) {
-    execItem.isCompleted = true
-    execItem.actualInterest = actualInterestInput.value
-    localStorage.setSync('executionPlan', planData)
-
-    // Apply allocation update to left panel
-    applyAllocationUpdate(selectedMaturity.value, actualInterestInput.value)
-
-    // Reload to refresh the display
-    loadExecutionPlan()
-    showToast({ title: '已标记完成，资金分配已更新', icon: 'success' })
+  const confirmedDemandBefore = parseMoney(currentDemandBalanceInput.value)
+  if (currentDemandBalanceInput.value === '' || confirmedDemandBefore < 0) {
+    completionError.value = '请输入当前活期余额'
+    return
   }
 
-  showCompletionModal.value = false
+  const preview = getCompletionAllocationPreview(selectedMaturity.value, actualInterestInput.value, currentDemandBalanceInput.value)
+  const completionMetadata = applyCompletionAllocation(planData, selectedMaturity.value, preview)
+  if (!completionMetadata) {
+    completionError.value = '资金状态更新失败'
+    return
+  }
+
+  let updated = false
+
+  if (selectedMaturity.value.source === 'existing') {
+    const transitionItem = (planData.transitionPlan || []).find(item =>
+      String(item.id) === String(selectedMaturity.value.id) ||
+      (item.type === selectedMaturity.value.depositType && item.maturityDate === selectedMaturity.value.date)
+    )
+
+    if (transitionItem) {
+      transitionItem.status = 'completed'
+      transitionItem.actualInterest = actualInterestInput.value
+      transitionItem.confirmedDemandBalanceBefore = completionMetadata.confirmedDemandBalanceBefore
+      transitionItem.allocationApplied = completionMetadata.allocationApplied
+      transitionItem.snapshotBefore = completionMetadata.snapshotBefore
+      transitionItem.snapshotAfter = completionMetadata.snapshotAfter
+      updated = true
+    }
+  } else {
+    const execItem = planData.executionList.find(e =>
+      e.year === selectedMaturity.value.year &&
+      e.quarter === selectedMaturity.value.quarter &&
+      e.depositType === selectedMaturity.value.depositType
+    )
+
+    if (execItem) {
+      execItem.isCompleted = true
+      execItem.actualInterest = actualInterestInput.value
+      execItem.confirmedDemandBalanceBefore = completionMetadata.confirmedDemandBalanceBefore
+      execItem.allocationApplied = completionMetadata.allocationApplied
+      execItem.snapshotBefore = completionMetadata.snapshotBefore
+      execItem.snapshotAfter = completionMetadata.snapshotAfter
+      updated = true
+    }
+  }
+
+  if (updated) {
+    localStorage.setSync('executionPlan', planData)
+    loadExecutionPlan()
+    showToast({ title: '已标记完成，资金分配已更新', icon: 'success' })
+  } else {
+    showToast({ title: '未找到对应任务记录', icon: 'none' })
+  }
+
+  completionError.value = ''
+  closeCompletionModal()
 }
 
 // Go to generate
@@ -534,7 +1005,7 @@ const openWithdrawalModal = () => {
     return
   }
 
-  const longTermTypes = ['1 年定期', '2 年定期', '3 年定期', '5 年定期']
+  const longTermTypes = ['1年定期', '2年定期', '3年定期', '5年定期']
   withdrawableDeposits.value = planData.allocation
     .filter(d => longTermTypes.includes(d.type) && (d.remainingBalance || d.amount) > 0)
     .map(d => ({
@@ -596,7 +1067,18 @@ const confirmWithdrawal = () => {
 
 // Input handlers
 const onDemandDepositBalanceInput = (e) => {
-  demandDepositBalance.value = e.target.value
+  demandDepositDraft.value = e.target.value
+}
+
+const startEditingDemandDepositBalance = () => {
+  const currentDeposit = currentDeposits.value.find(d => d.type === '活期存款')
+  demandDepositDraft.value = currentDeposit ? String(currentDeposit.remainingBalance ?? currentDeposit.amount ?? 0) : '0'
+  editingDemandBalance.value = true
+}
+
+const cancelDemandDepositBalanceEdit = () => {
+  editingDemandBalance.value = false
+  demandDepositDraft.value = demandDepositBalance.value.replace(/,/g, '')
 }
 
 const updateDemandDepositBalance = () => {
@@ -605,9 +1087,10 @@ const updateDemandDepositBalance = () => {
 
   const currentDeposit = planData.allocation.find(d => d.type === '活期存款')
   if (currentDeposit) {
-    const newBalance = parseFloat(demandDepositBalance.value.replace(/,/g, '')) || 0
+    const newBalance = parseFloat(demandDepositDraft.value.replace(/,/g, '')) || 0
     currentDeposit.remainingBalance = newBalance
     localStorage.setSync('executionPlan', planData)
+    editingDemandBalance.value = false
     loadExecutionPlan()
     showToast({ title: '已更新活期余额', icon: 'success' })
   }
@@ -619,6 +1102,7 @@ const getDepositIcon = (type) => {
   if (type?.includes('3个月') || type?.includes('3 个月')) return '📅'
   if (type?.includes('6个月') || type?.includes('6 个月')) return '📆'
   if (type?.includes('1年') || type?.includes('1 年')) return '💎'
+  if (type?.includes('2年') || type?.includes('2 年')) return '🏛️'
   if (type?.includes('3年') || type?.includes('3 年')) return '🏦'
   if (type?.includes('5年') || type?.includes('5 年')) return '🔒'
   return '💰'
@@ -632,6 +1116,9 @@ onMounted(() => {
 
 <template>
   <div class="page-container">
+    <div style="margin-bottom: 12px; font-size: 12px; line-height: 1.4; color: #7a7a7a; word-break: break-all;">
+      调试：{{ debugStatusLine }}
+    </div>
     <!-- No Plan State -->
     <div v-if="!hasPlan" class="no-plan-container">
       <div class="no-plan-card">
@@ -681,14 +1168,39 @@ onMounted(() => {
           </div>
           <div class="demand-balance-row">
             <span class="demand-label">当前余额</span>
-            <div class="demand-input-group">
+            <div v-if="!editingDemandBalance" class="demand-display-group">
+              <span class="currency">¥</span>
+              <span class="demand-balance-value">{{ demandDepositBalance }}</span>
+            </div>
+            <div v-else class="demand-input-group">
               <span class="currency">¥</span>
               <input
                 type="text"
-                v-model="demandDepositBalance"
-                @blur="updateDemandDepositBalance"
+                v-model="demandDepositDraft"
                 class="demand-input"
               />
+            </div>
+          </div>
+          <div class="demand-card-actions">
+            <button v-if="!editingDemandBalance" class="demand-action-btn" @click="startEditingDemandDepositBalance">
+              手动调整
+            </button>
+            <template v-else>
+              <button class="demand-action-btn ghost" @click="cancelDemandDepositBalanceEdit">
+                取消
+              </button>
+              <button class="demand-action-btn" @click="updateDemandDepositBalance">
+                保存
+              </button>
+            </template>
+          </div>
+          <div v-if="executionLiquidityWarning" class="demand-warning-inline">
+            <div class="demand-warning-title">流动性预警</div>
+            <div class="demand-warning-text">
+              活期 ¥{{ formatAmount(executionLiquidityWarning.demandBalance) }} - 应急金 ¥{{ formatAmount(executionLiquidityWarning.emergency) }}
+              = ¥{{ formatAmount(executionLiquidityWarning.demandBalance - executionLiquidityWarning.emergency) }}，
+              低于本季度支出 ¥{{ formatAmount(executionLiquidityWarning.quarterTotal) }}，
+              缺口 ¥{{ formatAmount(executionLiquidityWarning.shortfall) }}
             </div>
           </div>
         </div>
@@ -743,6 +1255,34 @@ onMounted(() => {
           </div>
         </div>
 
+        <div v-if="initialRebalanceRows.length > 0 || initialRebalanceDone" class="rebalance-card">
+          <div class="rebalance-title">初始调仓建议</div>
+          <div class="rebalance-subtitle">
+            {{ initialRebalanceDone ? '初始调仓已完成。这里保留的是初始设置步骤的记录，可按需折返。' : '按规则保留活期 = 应急金 + 近期支出，其余资金转入对应定期。' }}
+          </div>
+          <div v-if="initialRebalanceRows.length > 0" class="rebalance-list">
+            <div v-for="row in initialRebalanceRows" :key="row.type" class="rebalance-row">
+              <div class="rebalance-type">{{ row.type }}</div>
+              <div class="rebalance-values">
+                <span class="rebalance-current">当前 ¥{{ row.currentFormatted }}</span>
+                <span class="rebalance-arrow">→</span>
+                <span class="rebalance-target">目标 ¥{{ row.targetFormatted }}</span>
+              </div>
+              <div class="rebalance-delta" :class="row.direction">
+                <span v-if="row.direction === 'decrease'">转出 ¥{{ row.deltaFormatted }}</span>
+                <span v-else-if="row.direction === 'increase'">转入 ¥{{ row.deltaFormatted }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="initialRebalanceDone" class="rebalance-complete-state">
+            初始调仓已完成，后续余额变化以执行记录和手动更新的活期余额为准。
+          </div>
+          <div class="rebalance-actions">
+            <button v-if="!initialRebalanceDone" class="btn-primary" @click="completeInitialRebalance">完成初始调仓</button>
+            <button v-if="initialRebalanceDone" class="btn-secondary" @click="rollbackInitialRebalance">折返初始调仓</button>
+          </div>
+        </div>
+
         <!-- Tab Navigation -->
         <div class="tab-nav">
           <button
@@ -792,7 +1332,8 @@ onMounted(() => {
                     {{ isExpanded(group.key) ? '▼' : '▶' }}
                   </div>
                   <div class="group-title">
-                    <span class="group-name">{{ group.key }}</span>
+                    <span class="group-name">{{ group.dateLabel }}</span>
+                    <span class="group-source">{{ group.sourceLabel }}</span>
                     <span v-if="getGroupUrgency(group) === 'overdue'" class="group-tag overdue">已逾期</span>
                     <span v-else-if="getGroupUrgency(group) === 'urgent'" class="group-tag urgent">本季度</span>
                   </div>
@@ -839,23 +1380,23 @@ onMounted(() => {
                   </div>
 
                   <!-- Allocation Section - New Fund Allocation -->
-                  <div class="maturity-allocation">
+                  <div v-if="isMaturityEntry(maturity)" class="maturity-allocation">
                     <div class="allocation-header">
                       <span class="allocation-title">📋 到期资金分配</span>
                       <span class="allocation-total">合计: ¥{{ formatAmount(parseFloat(maturity.amount) + parseFloat(maturity.projectedInterest)) }}</span>
                     </div>
                     <div class="allocation-list">
                       <div
-                        v-for="(alloc, allocIdx) in parseAllocation(maturity.actionDetails)"
+                        v-for="(alloc, allocIdx) in parseActionAllocations(maturity.actionDetails)"
                         :key="allocIdx"
                         class="allocation-line"
                       >
                         <span class="alloc-icon">{{ alloc.icon }}</span>
-                        <span class="alloc-type">{{ alloc.type }}</span>
+                        <span class="alloc-type">{{ alloc.displayType }}</span>
                         <span class="alloc-amount">¥{{ alloc.amount }}</span>
                         <span v-if="alloc.note" class="alloc-note">({{ alloc.note }})</span>
                       </div>
-                      <div v-if="parseAllocation(maturity.actionDetails).length === 0" class="allocation-empty">
+                      <div v-if="parseActionAllocations(maturity.actionDetails).length === 0" class="allocation-empty">
                         <span>💡 全部转入活期账户</span>
                       </div>
                     </div>
@@ -896,6 +1437,7 @@ onMounted(() => {
                 实际利息 ¥{{ item.actualInterestFormatted }}
               </div>
               <div class="completed-badge">✓ 已完成</div>
+              <button class="btn-rollback-line" @click="rollbackCompletion(item)">折返</button>
             </div>
           </div>
         </div>
@@ -928,11 +1470,11 @@ onMounted(() => {
     </div>
 
     <!-- Completion Modal -->
-    <div v-if="showCompletionModal" class="modal-overlay" @click="showCompletionModal = false">
+    <div v-if="showCompletionModal" class="modal-overlay" @click="closeCompletionModal">
       <div class="modal-content completion-modal" @click.stop>
         <div class="modal-header">
           <h3>处理到期存款</h3>
-          <button class="close-btn" @click="showCompletionModal = false">×</button>
+          <button class="close-btn" @click="closeCompletionModal">×</button>
         </div>
         <div class="modal-body">
           <div class="completion-summary" v-if="selectedMaturity">
@@ -967,11 +1509,63 @@ onMounted(() => {
             <p class="input-hint">输入银行实际支付的利息金额（将转入活期存款）</p>
           </div>
 
+          <div class="interest-input-section">
+            <label>当前活期余额</label>
+            <div class="input-with-prefix">
+              <span class="prefix">¥</span>
+              <input
+                type="text"
+                v-model="currentDemandBalanceInput"
+                placeholder="确认当前实际活期余额"
+              />
+            </div>
+            <p class="input-hint">每次完成前，先确认真实活期余额。系统会按这个金额作为本次执行起点。</p>
+          </div>
+
+          <div class="reserve-breakdown">
+            <div class="reserve-header">
+              <label>本季度储备目标</label>
+              <span class="reserve-target">¥{{ formatAmount(executionExpenseBreakdown.reserveTarget) }}</span>
+            </div>
+            <div class="reserve-grid">
+              <div class="reserve-item">
+                <span>房屋支出</span>
+                <strong>¥{{ formatAmount(executionExpenseBreakdown.housing * 3) }}</strong>
+              </div>
+              <div class="reserve-item">
+                <span>餐饮支出</span>
+                <strong>¥{{ formatAmount(executionExpenseBreakdown.food * 3) }}</strong>
+              </div>
+              <div class="reserve-item">
+                <span>其他支出</span>
+                <strong>¥{{ formatAmount(executionExpenseBreakdown.other * 3) }}</strong>
+              </div>
+              <div class="reserve-item">
+                <span>应急金</span>
+                <strong>¥{{ formatAmount(executionExpenseBreakdown.emergency) }}</strong>
+              </div>
+            </div>
+            <div class="reserve-status">
+              <span>确认前活期</span>
+              <strong>¥{{ formatAmount(completionPreview.confirmedDemandBefore || 0) }}</strong>
+            </div>
+            <div class="reserve-status">
+              <span>本次还需补足</span>
+              <strong :class="{ positive: completionPreview.reserveGapBefore > 0 }">¥{{ formatAmount(completionPreview.reserveGapBefore || 0) }}</strong>
+            </div>
+            <div class="reserve-status">
+              <span>储备状态</span>
+              <strong :class="completionPreview.reserveSatisfiedBefore ? 'status-met' : 'status-unmet'">
+                {{ completionPreview.reserveSatisfiedBefore ? '已达标' : '未达标' }}
+              </strong>
+            </div>
+          </div>
+
           <!-- Allocation Preview -->
           <div class="allocation-preview" v-if="selectedMaturity">
             <div class="preview-header">
               <label>资金分配预览</label>
-              <span class="preview-total">合计: ¥{{ formatAmount(parseFloat(selectedMaturity.amount) + parseFloat(actualInterestInput || 0)) }}</span>
+              <span class="preview-total">合计: ¥{{ formatAmount(completionPreview.totalAvailable || 0) }}</span>
             </div>
             <div class="preview-list">
               <div class="preview-item source">
@@ -980,25 +1574,21 @@ onMounted(() => {
                 <span class="preview-amount negative">-¥{{ selectedMaturity.amountFormatted }}</span>
               </div>
               <div
-                v-for="(alloc, idx) in parseAllocation(selectedMaturity.actionDetails)"
+                v-for="(alloc, idx) in completionPreview.allocations"
                 :key="idx"
                 class="preview-item"
               >
                 <span class="preview-icon">{{ alloc.icon }}</span>
-                <span class="preview-type">{{ alloc.type }}</span>
-                <span class="preview-amount positive">+¥{{ alloc.amount }}</span>
-              </div>
-              <div v-if="actualInterestInput" class="preview-item interest">
-                <span class="preview-icon">💵</span>
-                <span class="preview-type">活期存款（利息）</span>
-                <span class="preview-amount positive">+¥{{ formatAmount(parseFloat(actualInterestInput)) }}</span>
+                <span class="preview-type">{{ alloc.displayType }}</span>
+                <span class="preview-amount positive">+¥{{ alloc.amountFormatted }}</span>
               </div>
             </div>
             <p class="preview-note">点击"确认完成"后将按上述分配更新资金面板</p>
           </div>
+          <div v-if="completionError" class="form-error">{{ completionError }}</div>
         </div>
         <div class="modal-footer">
-          <button class="btn-secondary" @click="showCompletionModal = false">取消</button>
+          <button class="btn-secondary" @click="closeCompletionModal">取消</button>
           <button class="btn-primary" @click="confirmCompletion">确认完成</button>
         </div>
       </div>
@@ -1059,7 +1649,7 @@ onMounted(() => {
 /* Layout */
 .execute-layout {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 320px 1fr;
   gap: 12px;
 }
 
@@ -1214,6 +1804,7 @@ onMounted(() => {
   opacity: 0.9;
 }
 
+.demand-display-group,
 .demand-input-group {
   display: flex;
   align-items: center;
@@ -1222,9 +1813,23 @@ onMounted(() => {
   padding: 8px 12px;
 }
 
+.demand-display-group {
+  min-width: 168px;
+  justify-content: flex-end;
+}
+
 .currency {
   font-size: 16px;
   margin-right: 4px;
+}
+
+.demand-balance-value {
+  color: white;
+  font-size: 18px;
+  font-weight: 600;
+  min-width: 120px;
+  text-align: right;
+  font-family: 'DIN Alternate', monospace;
 }
 
 .demand-input {
@@ -1241,6 +1846,49 @@ onMounted(() => {
 
 .demand-input::placeholder {
   color: rgba(255,255,255,0.6);
+}
+
+.demand-card-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.demand-warning-inline {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #7f1d1d;
+  border: 1px solid #f87171;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.demand-warning-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.demand-warning-text {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #fee2e2;
+}
+
+.demand-action-btn {
+  border: none;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  color: white;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.demand-action-btn.ghost {
+  background: rgba(255,255,255,0.12);
 }
 
 /* Quick Actions */
@@ -1311,6 +1959,95 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 4px;
+}
+
+.rebalance-card {
+  margin-bottom: 20px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: #f8fbff;
+  border: 1px solid #d7e8ff;
+}
+
+.rebalance-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rebalance-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.rebalance-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rebalance-complete-state {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.rebalance-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rebalance-row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.rebalance-type {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rebalance-values {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.rebalance-arrow {
+  color: var(--text-tertiary);
+}
+
+.rebalance-target {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.rebalance-delta {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rebalance-delta.increase {
+  color: #1677ff;
+}
+
+.rebalance-delta.decrease {
+  color: #d46b08;
 }
 
 /* Next Alert */
@@ -1505,6 +2242,15 @@ onMounted(() => {
 .group-name {
   font-size: 15px;
   font-weight: 600;
+}
+
+.group-source {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  background: rgba(52, 152, 219, 0.12);
+  color: #2f6db3;
 }
 
 .group-tag {
@@ -1772,6 +2518,21 @@ onMounted(() => {
 
 .btn-complete-line:hover {
   background: #06ad56;
+}
+
+.btn-rollback-line {
+  padding: 6px 12px;
+  background: #fff7e6;
+  color: #d46b08;
+  border: 1px solid #ffd591;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-rollback-line:hover {
+  background: #ffe7ba;
 }
 
 /* Group Footer */
@@ -2080,6 +2841,79 @@ onMounted(() => {
   margin-top: 8px;
 }
 
+.reserve-breakdown {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--background-color);
+  border-radius: 10px;
+}
+
+.reserve-header,
+.reserve-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reserve-header label,
+.reserve-status span {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.reserve-target,
+.reserve-status strong {
+  font-weight: 600;
+  font-family: 'DIN Alternate', monospace;
+  color: var(--text-primary);
+}
+
+.reserve-status .status-met {
+  color: #16a34a;
+}
+
+.reserve-status .status-unmet {
+  color: #dc2626;
+}
+
+.reserve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.reserve-item {
+  background: white;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.reserve-item span {
+  color: var(--text-secondary);
+}
+
+.reserve-item strong {
+  font-weight: 600;
+  font-family: 'DIN Alternate', monospace;
+}
+
+.reserve-status + .reserve-status {
+  margin-top: 10px;
+}
+
+.form-error {
+  margin-top: 12px;
+  color: #ff4d4f;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 /* Allocation Preview */
 .allocation-preview {
   margin-top: 24px;
@@ -2309,3 +3143,5 @@ onMounted(() => {
   }
 }
 </style>
+
+

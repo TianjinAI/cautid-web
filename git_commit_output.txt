@@ -1,2 +1,0 @@
-[master 8f82207] Fix allocation parsing: merge expenses into current deposit account
- 1 file changed, 1730 insertions(+), 1007 deletions(-)

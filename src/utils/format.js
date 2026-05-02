@@ -5,24 +5,35 @@
 // 2026年银行存款利率（参考值）
 const INTEREST_RATES = {
   demand: 0.05,      // 活期
-  threeMonths: 0.70,  // 3 个月定期（中小银行平均值）
-  sixMonths: 0.95,   // 6 个月定期
-  oneYear: 1.15,     // 1 年定期
-  twoYears: 1.20,    // 2 年定期
-  threeYears: 1.30,   // 3 年定期
-  fiveYears: 1.50     // 5 年定期（添加 5 年利率）
+  threeMonths: 0.70,  // 3个月定期（中小银行平均值）
+  sixMonths: 0.95,   // 6个月定期
+  oneYear: 1.15,     // 1年定期
+  twoYears: 1.20,    // 2年定期
+  threeYears: 1.30,   // 3年定期
+  fiveYears: 1.50     // 5年定期（添加 5 年利率）
 };
 
 // 存款类型定义（包含期限，单位：月）
 const DEPOSIT_TYPES = [
   { type: '活期存款', duration: 0, rateKey: 'demand' },
-  { type: '3 个月定期', duration: 3, rateKey: 'threeMonths' },
-  { type: '6 个月定期', duration: 6, rateKey: 'sixMonths' },
-  { type: '1 年定期', duration: 12, rateKey: 'oneYear' },
-  { type: '2 年定期', duration: 24, rateKey: 'twoYears' },
-  { type: '3 年定期', duration: 36, rateKey: 'threeYears' },
-  { type: '5 年定期', duration: 60, rateKey: 'fiveYears' }
+  { type: '3个月定期', duration: 3, rateKey: 'threeMonths' },
+  { type: '6个月定期', duration: 6, rateKey: 'sixMonths' },
+  { type: '1年定期', duration: 12, rateKey: 'oneYear' },
+  { type: '2年定期', duration: 24, rateKey: 'twoYears' },
+  { type: '3年定期', duration: 36, rateKey: 'threeYears' },
+  { type: '5年定期', duration: 60, rateKey: 'fiveYears' }
 ];
+
+function normalizeDepositType(type) {
+  if (type === null || type === undefined) return '';
+  return String(type).replace(/\s+/g, '');
+}
+
+function roundToNearestThousand(amount) {
+  if (amount === null || amount === undefined) return amount;
+  if (amount < 1000) return 0;
+  return Math.floor(amount / 1000) * 1000;
+}
 
 /**
  * 根据规划期限获取可用的存款类型
@@ -118,7 +129,7 @@ function calculateInterest(principal, rate, years) {
 
 // 获取存款类型的利率
 function getRateForType(type) {
-  switch (type) {
+  switch (normalizeDepositType(type)) {
     case '活期存款':
       // 活期存款不计利息
       return 0;
@@ -139,7 +150,7 @@ function getRateForType(type) {
 
 // 获取存款期限（年）
 function getYearsForType(type) {
-  switch (type) {
+  switch (normalizeDepositType(type)) {
     case '活期存款':
       return 0;
     case '3个月定期':
@@ -148,7 +159,7 @@ function getYearsForType(type) {
       return 0.5;
     case '1年定期':
       return 1;
-    case '2 年定期':
+    case '2年定期':
       return 2;
     case '3年定期':
       return 3;
@@ -161,7 +172,7 @@ function getYearsForType(type) {
 
 // 获取存款期限（月）
 function getMonthsForType(type) {
-  switch (type) {
+  switch (normalizeDepositType(type)) {
     case '活期存款':
       return 0;
     case '3个月定期':
@@ -170,7 +181,7 @@ function getMonthsForType(type) {
       return 6;
     case '1年定期':
       return 12;
-    case '2 年定期':
+    case '2年定期':
       return 24;
     case '3年定期':
       return 36;
@@ -220,10 +231,11 @@ function calculateEarnedInterestToDate(deposit) {
   const startDate = new Date(deposit.depositDate);
   const today = new Date();
   const days = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
+  const normalizedType = normalizeDepositType(deposit.type);
 
   if (days <= 0) return 0;
 
-  const rate = (deposit.interestRate || getRateForType(deposit.type)) / 100;
+  const rate = (deposit.interestRate || getRateForType(normalizedType)) / 100;
   // 简单利息计算
   return deposit.amount * rate * (days / 365);
 }
@@ -240,6 +252,7 @@ function generatePlan(inputData) {
   const annualExpense = monthlyExpense * 12;
   const currentDate = new Date();
   const currentYear = currentDate.getFullYear();
+  const normalizedExistingPortfolio = (existingPortfolio || []).map(d => ({ ...d, type: normalizeDepositType(d.type) }));
 
   // === 新增：处理现有存款 ===
   // 计算现有存款总额
@@ -255,7 +268,7 @@ function generatePlan(inputData) {
   console.log('existingPortfolio:', existingPortfolio);
 
   // 检查流动性：活期存款是否足够覆盖季度支出
-  const existingDemand = existingPortfolio.find(d => d.type === '活期存款');
+  const existingDemand = normalizedExistingPortfolio.find(d => normalizeDepositType(d.type) === '活期存款');
   const availableDemand = existingDemand ? existingDemand.amount - emergencyFund : 0;
   const liquidityShortfall = Math.max(0, quarterlyExpense - availableDemand);
 
@@ -263,15 +276,12 @@ function generatePlan(inputData) {
     console.log('WARNING: No demand deposit in existing portfolio, need to allocate from netNewCash');
   }
 
-  // 计算可用资金（调整后：netNewCash，而非 totalCash - emergencyFund）
-  // 如果现有存款已包含应急金，则不需要额外预留
-  const hasExistingEmergencyFund = existingDemand && existingDemand.amount >= emergencyFund;
-  const effectiveEmergencyFund = hasExistingEmergencyFund ? 0 : emergencyFund;
-  const availableCash = netNewCash - effectiveEmergencyFund;
+  // 规则化处理：活期作为总流动资金池，先满足规则目标，再按顺序分配剩余资金
+  const availableCash = Math.max(0, netNewCash);
 
   // 获取基于规划期限的可用存款类型
   const availableTypes = getAvailableDepositTypes(planningHorizon);
-  const has2Year = availableTypes.some(t => t.type === '2 年定期');
+  const has2Year = availableTypes.some(t => t.type === '2年定期');
   const has3Year = availableTypes.some(t => t.type === '3年定期');
   const has5Year = availableTypes.some(t => t.type === '5年定期');
   const has1Year = availableTypes.some(t => t.type === '1年定期');
@@ -285,7 +295,7 @@ function generatePlan(inputData) {
   // === 新增：分析现有存款覆盖情况 ===
   // 按类型汇总现有存款
   const existingByType = {};
-  existingPortfolio.forEach(d => {
+  normalizedExistingPortfolio.forEach(d => {
     if (!existingByType[d.type]) existingByType[d.type] = { total: 0, deposits: [] };
     existingByType[d.type].total += d.amount;
     existingByType[d.type].deposits.push(d);
@@ -296,14 +306,19 @@ function generatePlan(inputData) {
   const existing3MonthAmount = existingByType['3个月定期']?.total || 0;
   const existing6MonthAmount = existingByType['6个月定期']?.total || 0;
   const existing1YearAmount = existingByType['1年定期']?.total || 0;
-  const existing2YearAmount = existingByType['2 年定期']?.total || 0;
+  const existing2YearAmount = existingByType['2年定期']?.total || 0;
   const existing3YearAmount = existingByType['3年定期']?.total || 0;
   const existing5YearAmount = existingByType['5年定期']?.total || 0;
 
   // 第一步：确定活期资金（应急金 + 第一季度支出）
-  // 如果现有活期已足够，则不需要额外分配
+  // 新增活期只来自当前可调配活期池，避免“双重预留应急金”
   const requiredDemand = emergencyFund + quarterlyExpense;
-  const newDemandAmount = Math.max(0, requiredDemand - existingDemandAmount);
+  let remainingCash = availableCash;
+  const newDemandAmount = Math.min(
+    remainingCash,
+    Math.max(0, requiredDemand - existingDemandAmount)
+  );
+  remainingCash -= newDemandAmount;
 
   const currentDeposit = newDemandAmount > 0 ? {
     type: '活期存款',
@@ -319,14 +334,18 @@ function generatePlan(inputData) {
 
   // 第二步：计算第二季度（4-6月）的资金来源（3个月定期）
   // 如果现有3个月定期已足够，则不需要额外分配
-  const new3MonthAmount = Math.max(0, quarterlyExpense - existing3MonthAmount);
+  const new3MonthAmount = Math.min(
+    remainingCash,
+    Math.max(0, quarterlyExpense - existing3MonthAmount)
+  );
+  remainingCash -= new3MonthAmount;
   const threeMonthDeposit = (typeMap['3个月定期'] && new3MonthAmount > 0) ? {
     type: '3个月定期',
     amount: new3MonthAmount,
     maturityDate: addMonths(currentDate, 3),
     maturityDateStr: formatDate(addMonths(currentDate, 3), 'YYYY年MM月DD日'),
     depositDate: new Date().toISOString(),
-    description: `${formatDate(addMonths(currentDate, 3), 'YYYY年MM月DD日')}到期当日全额用于支付第二季度（4-6月）开销`,
+    description: `${formatDate(addMonths(currentDate, 3), 'YYYY年MM月DD日')}到期当日将本息优先用于支付第二季度（4-6月）开销`,
     purpose: '第二季度开销',
     action: '到期提取用于支付Q2开销',
     isNew: true
@@ -335,31 +354,34 @@ function generatePlan(inputData) {
   // 第三步：计算第三季度（7-9月）的资金来源（6个月定期）
   // 6个月定期 = Q3支出（1个季度）+ 转存Q4部分（1个季度）
   const required6Month = quarterlyExpense * 2;
-  const new6MonthAmount = Math.max(0, required6Month - existing6MonthAmount);
+  const new6MonthAmount = Math.min(
+    remainingCash,
+    Math.max(0, required6Month - existing6MonthAmount)
+  );
+  remainingCash -= new6MonthAmount;
+  const q3CoverageAmount = Math.min(new6MonthAmount, quarterlyExpense);
+  const q4RolloverAmount = Math.max(0, new6MonthAmount - q3CoverageAmount);
   const sixMonthDeposit = (typeMap['6个月定期'] && new6MonthAmount > 0) ? {
     type: '6个月定期',
     amount: new6MonthAmount,
     maturityDate: addMonths(currentDate, 6),
     maturityDateStr: formatDate(addMonths(currentDate, 6), 'YYYY年MM月DD日'),
     depositDate: new Date().toISOString(),
-    description: `${formatDate(addMonths(currentDate, 6), 'YYYY年MM月DD日')}到期当日：支付第三季度（7-9月）开销${formatAmount(quarterlyExpense)}元，剩余${formatAmount(quarterlyExpense)}元立即转存为3个月定期`,
+    description: `${formatDate(addMonths(currentDate, 6), 'YYYY年MM月DD日')}到期当日：优先支付第三季度（7-9月）开销${formatAmount(q3CoverageAmount)}元${q4RolloverAmount > 0 ? `，剩余${formatAmount(q4RolloverAmount)}元立即转存为3个月定期` : ''}`,
     purpose: '第三季度开销 + 转存',
     action: '到期拆分：部分支付Q3，部分转存Q4',
     isNew: true
   } : null;
 
   // 第四步：计算剩余资金
-  let allocatedSoFar = (currentDeposit ? currentDeposit.amount : 0);
-  if (threeMonthDeposit) allocatedSoFar += threeMonthDeposit.amount;
-  if (sixMonthDeposit) allocatedSoFar += sixMonthDeposit.amount;
-  let remainingCash = availableCash - allocatedSoFar;
+  const allocatedSoFar = availableCash - remainingCash;
 
   console.log('DEBUG allocation:', {
     totalCash,
     availableCash,
     emergencyFund,
     quarterlyExpense,
-    currentDeposit: currentDeposit.amount,
+    currentDeposit: currentDeposit ? currentDeposit.amount : 0,
     threeMonthDeposit: threeMonthDeposit ? threeMonthDeposit.amount : 0,
     sixMonthDeposit: sixMonthDeposit ? sixMonthDeposit.amount : 0,
     allocatedSoFar,
@@ -369,39 +391,6 @@ function generatePlan(inputData) {
     has3Year,
     has5Year
   });
-
-  // 确保remainingCash不为负数
-  // 如果总分配超过可用资金，需要调整各定期的金额
-  if (remainingCash < 0) {
-    // 计算缺口的金额
-    const shortfall = Math.abs(remainingCash);
-
-    // 首先从6个月定期中扣除（因为6个月定期可以调整：少转存Q4部分）
-    if (sixMonthDeposit && sixMonthDeposit.amount > quarterlyExpense) {
-      const reduction = Math.min(shortfall, sixMonthDeposit.amount - quarterlyExpense);
-      sixMonthDeposit.amount -= reduction;
-      allocatedSoFar -= reduction;
-      remainingCash += reduction;  // 减少缺口
-
-      // 更新描述
-      const rolloverAmount = sixMonthDeposit.amount - quarterlyExpense;
-      sixMonthDeposit.description = `${formatDate(addMonths(currentDate, 6), 'YYYY年MM月DD日')}到期当日：支付第三季度（7-9月）开销${formatAmount(quarterlyExpense)}元，剩余${formatAmount(rolloverAmount)}元立即转存为3个月定期`;
-    }
-
-    // 如果还有缺口，从3个月定期中扣除
-    if (remainingCash < 0 && threeMonthDeposit && threeMonthDeposit.amount > quarterlyExpense) {
-      const reduction = Math.min(Math.abs(remainingCash), threeMonthDeposit.amount - quarterlyExpense);
-      threeMonthDeposit.amount -= reduction;
-      allocatedSoFar -= reduction;
-      remainingCash += reduction;
-    }
-
-    console.log('DEBUG adjusted:', {
-      sixMonthDeposit: sixMonthDeposit ? sixMonthDeposit.amount : 0,
-      threeMonthDeposit: threeMonthDeposit ? threeMonthDeposit.amount : 0,
-      remainingCash
-    });
-  }
 
   // 第五步：将剩余资金分配到长期存款（根据规划期限约束）
   // 约束：存款期限 <= 规划期限
@@ -425,9 +414,11 @@ function generatePlan(inputData) {
   if (has1Year && remainingCash > 0) {
     // 1年定期：根据规划类型决定分配金额
     const actualOneYearAmount = Math.min(oneYearAmount, remainingCash);
+    const roundedOneYearAmount = roundToNearestThousand(actualOneYearAmount);
+    remainingCash += (actualOneYearAmount - roundedOneYearAmount);
     oneYearDeposit = {
       type: '1年定期',
-      amount: actualOneYearAmount,
+      amount: roundedOneYearAmount,
       maturityDate: addYears(currentDate, 1),
       maturityDateStr: formatDate(addYears(currentDate, 1), 'YYYY年MM月DD日'),
       depositDate: new Date().toISOString(),
@@ -446,11 +437,13 @@ function generatePlan(inputData) {
     remainingCash = 0;
   }
 
-  // 2 年定期：只有规划期限 >= 2 年时才有
+  // 2年定期：只有规划期限 >= 2 年时才有
   if (has2Year && remainingCash > 0) {
+    const roundedTwoYearAmount = roundToNearestThousand(remainingCash);
+    remainingCash -= roundedTwoYearAmount;
     twoYearDeposit = {
-      type: '2 年定期',
-      amount: remainingCash,
+      type: '2年定期',
+      amount: roundedTwoYearAmount,
       maturityDate: addYears(currentDate, 2),
       maturityDateStr: formatDate(addYears(currentDate, 2), 'YYYY 年 MM 月 DD 日'),
       depositDate: new Date().toISOString(),
@@ -463,9 +456,11 @@ function generatePlan(inputData) {
 
   // 5年定期优先：只有规划期限 >= 5年时才有（最高利率，优先分配）
   if (has5Year && remainingCash > 0) {
+    const roundedFiveYearAmount = roundToNearestThousand(remainingCash);
+    remainingCash -= roundedFiveYearAmount;
     fiveYearDeposit = {
       type: '5年定期',
-      amount: remainingCash,
+      amount: roundedFiveYearAmount,
       maturityDate: addYears(currentDate, 5),
       maturityDateStr: formatDate(addYears(currentDate, 5), 'YYYY年MM月DD日'),
       depositDate: new Date().toISOString(),
@@ -478,9 +473,11 @@ function generatePlan(inputData) {
 
   // 3年定期：只有规划期限 >= 3年时才有（仅当没有5年定期或5年后还有剩余）
   if (has3Year && remainingCash > 0) {
+    const roundedThreeYearAmount = roundToNearestThousand(remainingCash);
+    remainingCash -= roundedThreeYearAmount;
     threeYearDeposit = {
       type: '3年定期',
-      amount: remainingCash,
+      amount: roundedThreeYearAmount,
       maturityDate: addYears(currentDate, 3),
       maturityDateStr: formatDate(addYears(currentDate, 3), 'YYYY年MM月DD日'),
       depositDate: new Date().toISOString(),
@@ -552,9 +549,8 @@ function generatePlan(inputData) {
   const initial3Year = (threeYearDeposit ? threeYearDeposit.amount : 0) + existing3YearAmount;
   const initial5Year = (fiveYearDeposit ? fiveYearDeposit.amount : 0) + existing5YearAmount;
 
-  // 计算现有存款的已获利息
+  // 现有存款的已获利息单独跟踪，不再叠加到规划期总预期利息中，避免重复计算
   const existingEarnedInterest = existingDepositsWithTracking.reduce((sum, d) => sum + (d.earnedInterest || 0), 0);
-  totalProjectedInterest += existingEarnedInterest;
 
   // === 5年定期利息计算（按比例） ===
   // 5年定期按规划期持有年限按比例计算利息
@@ -777,7 +773,10 @@ function generatePlan(inputData) {
   const executionList = generateExecutionList(inputData, allocation, existingPortfolio);
 
   // === 新增：生成过渡计划 ===
-  const transitionPlan = generateTransitionPlan(existingPortfolio, inputData);
+  const transitionPlan = generateTransitionPlan(existingPortfolio, {
+    ...inputData,
+    targetDemandBalance: existingDemandAmount + (currentDeposit ? currentDeposit.amount : 0)
+  });
 
   return {
     input: {
@@ -792,6 +791,8 @@ function generatePlan(inputData) {
       netNewCash
     },
     allocation,
+    recommendedAllocation: allocation.filter(item => item.isNew),
+    existingAllocation: allocation.filter(item => item.isExisting),
     cashFlowTimeline,
     executionList,
     transitionPlan,
@@ -824,8 +825,9 @@ function generateTransitionPlan(existingPortfolio, inputData) {
   const transitionPlan = [];
 
   existingPortfolio.forEach(deposit => {
+    const normalizedType = normalizeDepositType(deposit.type);
     // 活期存款不需要过渡计划
-    if (deposit.type === '活期存款') return;
+    if (normalizedType === '活期存款') return;
 
     // 计算到期日期
     const maturityDate = deposit.maturityDate ? new Date(deposit.maturityDate) : null;
@@ -833,16 +835,16 @@ function generateTransitionPlan(existingPortfolio, inputData) {
 
     // 计算利息
     const daysUntilMaturity = Math.ceil((maturityDate - currentDate) / (1000 * 60 * 60 * 24));
-    const rate = (deposit.interestRate || getRateForType(deposit.type)) / 100;
-    const yearsToMaturity = daysUntilMaturity / 365;
-    const projectedInterest = deposit.amount * rate * yearsToMaturity;
+    const rate = (deposit.interestRate || getRateForType(normalizedType)) / 100;
+    const termYears = getYearsForType(normalizedType) || 0;
+    const projectedInterest = deposit.amount * rate * termYears;
 
     // 确定到期后分配策略（B2策略：按目标调度对齐）
     const allocation = determineTransitionAllocation(deposit, inputData, projectedInterest);
 
     transitionPlan.push({
       id: deposit.id,
-      type: deposit.type,
+      type: normalizedType,
       amount: deposit.amount,
       maturityDate: deposit.maturityDate,
       maturityDateStr: formatDate(maturityDate, 'YYYY年MM月DD日'),
@@ -850,6 +852,7 @@ function generateTransitionPlan(existingPortfolio, inputData) {
       projectedInterest,
       totalWithInterest: deposit.amount + projectedInterest,
       allocation,
+      actionDetails: generateTransitionActionDetails(deposit, quarterlyExpense, deposit.amount + projectedInterest, allocation),
       status: daysUntilMaturity <= 0 ? 'matured' : 'pending'
     });
   });
@@ -868,15 +871,18 @@ function generateTransitionPlan(existingPortfolio, inputData) {
  * @returns {Object} 分配计划
  */
 function determineTransitionAllocation(deposit, inputData, interest) {
-  const { monthlyExpense, planningHorizon } = inputData;
+  const { monthlyExpense, planningHorizon, targetDemandBalance = 0 } = inputData;
   const quarterlyExpense = monthlyExpense * 3;
+  const requiredDemand = quarterlyExpense + (inputData.emergencyFund || 0);
 
   const totalWithInterest = deposit.amount + interest;
-  let remaining = totalWithInterest;
+  let remaining = deposit.amount;
 
-  // 策略：利息进入活期，本金按目标调度分配
+  // 策略：优先补足规则要求的活期目标，再把其余本金转去匹配期限。
+  // 如果初始调仓后活期已达标，就不再机械地重复塞入一个季度支出。
+  const demandShortfall = Math.max(0, requiredDemand - targetDemandBalance);
   const allocation = {
-    toDemand: interest, // 利息进活期
+    toDemand: interest,
     to3Month: 0,
     to6Month: 0,
     to1Year: 0,
@@ -884,35 +890,31 @@ function determineTransitionAllocation(deposit, inputData, interest) {
     description: ''
   };
 
-  // 剩余本金分配（优先覆盖季度支出）
-  if (remaining > quarterlyExpense) {
-    // 先分配一个季度的支出到活期
-    allocation.toDemand += quarterlyExpense;
-    remaining -= quarterlyExpense;
+  if (demandShortfall > 0) {
+    const topUp = Math.min(remaining, demandShortfall);
+    allocation.toDemand += topUp;
+    remaining -= topUp;
+  }
 
-    // 剩余部分存入最长可用期限（最大化利息）
-    if (remaining > 0) {
-      const maxTerm = getLongestAllowedTerm(planningHorizon);
-      if (maxTerm === '5年定期' && remaining > 0) {
-        allocation.toLongTerm = remaining;
-        allocation.longTermType = '5年定期';
-      } else if (maxTerm === '3年定期' && remaining > 0) {
-        allocation.toLongTerm = remaining;
-        allocation.longTermType = '3年定期';
-      } else if (maxTerm === '2 年定期' && remaining > 0) {
-        allocation.toLongTerm = remaining;
-        allocation.longTermType = '2 年定期';
-      } else if (remaining >= quarterlyExpense) {
-        allocation.to1Year = remaining;
-      } else if (remaining >= quarterlyExpense / 2) {
-        allocation.to6Month = remaining;
-      } else {
-        allocation.to3Month = remaining;
-      }
+  // 剩余部分存入最长可用期限（最大化利息）
+  if (remaining > 0) {
+    const maxTerm = getLongestAllowedTerm(planningHorizon);
+    if (maxTerm === '5年定期' && remaining > 0) {
+      allocation.toLongTerm = remaining;
+      allocation.longTermType = '5年定期';
+    } else if (maxTerm === '3年定期' && remaining > 0) {
+      allocation.toLongTerm = remaining;
+      allocation.longTermType = '3年定期';
+    } else if (maxTerm === '2年定期' && remaining > 0) {
+      allocation.toLongTerm = remaining;
+      allocation.longTermType = '2年定期';
+    } else if (remaining >= quarterlyExpense) {
+      allocation.to1Year = remaining;
+    } else if (remaining >= quarterlyExpense / 2) {
+      allocation.to6Month = remaining;
+    } else {
+      allocation.to3Month = remaining;
     }
-  } else {
-    // 全部进活期
-    allocation.toDemand = totalWithInterest;
   }
 
   // 生成描述
@@ -935,7 +937,7 @@ function determineTransitionAllocation(deposit, inputData, interest) {
 function getLongestAllowedTerm(planningHorizon) {
   if (planningHorizon >= 5) return '5年定期';
   if (planningHorizon >= 3) return '3年定期';
-  if (planningHorizon >= 2) return '2 年定期';
+  if (planningHorizon >= 2) return '2年定期';
   return '1年定期';
 }
 
@@ -946,29 +948,47 @@ function getLongestAllowedTerm(planningHorizon) {
  * @param {number} totalWithInterest - 本息合计
  * @returns {string} 操作详情文本
  */
-function generateTransitionActionDetails(deposit, quarterlyExpense, totalWithInterest) {
-  const rate = (deposit.interestRate || getRateForType(deposit.type)) / 100;
+function generateTransitionActionDetails(deposit, quarterlyExpense, totalWithInterest, allocationPlan = null) {
   const projectedInterest = totalWithInterest - deposit.amount;
+  const allocation = allocationPlan || {
+    toDemand: projectedInterest,
+    to3Month: 0,
+    to6Month: 0,
+    to1Year: 0,
+    toLongTerm: 0,
+    longTermType: ''
+  };
 
   let details = `【到期处理】\n`;
   details += `• 本金: ¥${formatAmount(deposit.amount)}\n`;
   details += `• 利息: ¥${formatAmount(projectedInterest)}\n`;
   details += `• 本息合计: ¥${formatAmount(totalWithInterest)}\n\n`;
 
-  // B2策略：利息进活期，本金按目标调度分配
+  // Execution view should read like a practical instruction sheet.
+  // Merge quarter spending into the demand deposit line and name any rollover term explicitly.
   details += `【资金分配】\n`;
-  details += `• 活期存款(利息): ¥${formatAmount(projectedInterest)}\n`;
 
-  let remaining = deposit.amount;
-  if (remaining >= quarterlyExpense) {
-    details += `• 季度支出: ¥${formatAmount(quarterlyExpense)}\n`;
-    remaining -= quarterlyExpense;
-    if (remaining > 0) {
-      // 剩余存入最长期限
-      details += `• 转存长期: ¥${formatAmount(remaining)}\n`;
-    }
-  } else {
-    details += `• 活期存款(本金): ¥${formatAmount(remaining)}\n`;
+  if (allocation.toDemand > 0) {
+    const demandLabel = allocation.toDemand > projectedInterest
+      ? '活期存款(补足本季度储备)'
+      : '活期存款';
+    details += `• ${demandLabel}: ¥${formatAmount(allocation.toDemand)}\n`;
+  }
+
+  if (allocation.to3Month > 0) {
+    details += `• 3个月定期: ¥${formatAmount(allocation.to3Month)}\n`;
+  }
+
+  if (allocation.to6Month > 0) {
+    details += `• 6个月定期: ¥${formatAmount(allocation.to6Month)}\n`;
+  }
+
+  if (allocation.to1Year > 0) {
+    details += `• 1年定期: ¥${formatAmount(allocation.to1Year)}\n`;
+  }
+
+  if (allocation.toLongTerm > 0) {
+    details += `• ${allocation.longTermType || '长期定期'}: ¥${formatAmount(allocation.toLongTerm)}\n`;
   }
 
   return details;
@@ -980,18 +1000,12 @@ function generateTransitionActionDetails(deposit, quarterlyExpense, totalWithInt
 function generateExecutionList(inputData, allocation, existingPortfolio = []) {
   const { totalCash, monthlyExpense, emergencyFund, planningHorizon = 1 } = inputData;
   const quarterlyExpense = monthlyExpense * 3;
-  const annualExpense = monthlyExpense * 12;
   const currentDate = new Date();
   const currentYear = currentDate.getFullYear();
-
-  // 获取可用的存款类型（基于规划期限约束）
-  const availableTypes = getAvailableDepositTypes(planningHorizon);
-  const availableTypeNames = availableTypes.map(t => t.type);
 
   const executionList = [];
   let idCounter = 1;
 
-  // 获取各存款金额
   const currentDeposit = allocation.find(a => a.type === '活期存款');
   const threeMonthDeposit = allocation.find(a => a.type === '3个月定期');
   const sixMonthDeposit = allocation.find(a => a.type === '6个月定期');
@@ -999,7 +1013,6 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
   const threeYearDeposit = allocation.find(a => a.type === '3年定期');
   const fiveYearDeposit = allocation.find(a => a.type === '5年定期');
 
-  // 初始存入操作
   let initDesc = '按计划分配资金：\n';
   if (currentDeposit) initDesc += `• 活期存款: ¥${formatAmount(currentDeposit.amount)}\n`;
   if (threeMonthDeposit) initDesc += `• 3个月定期: ¥${formatAmount(threeMonthDeposit.amount)}\n`;
@@ -1023,7 +1036,6 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
     actualInterest: null
   });
 
-  // 每月支出操作
   executionList.push({
     id: idCounter++,
     date: formatDate(addMonths(currentDate, 1), 'YYYY-MM-DD'),
@@ -1039,60 +1051,256 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
     actualInterest: null
   });
 
-  // 跟踪每年滚动存款的当前余额
   let oneYearBalance = oneYearDeposit ? oneYearDeposit.amount : 0;
   let threeYearBalance = threeYearDeposit ? threeYearDeposit.amount : 0;
   let fiveYearBalance = fiveYearDeposit ? fiveYearDeposit.amount : 0;
-  const startMonth = currentDate.getMonth() + 1; // 1-12
+  let simulatedDemandBalance = currentDeposit ? currentDeposit.amount : 0;
+  const startMonth = currentDate.getMonth() + 1;
+  const requiredDemand = emergencyFund + quarterlyExpense;
+  const quarterSchedules = new Map();
 
-  // 生成多年滚动计划 - 每年4个季度
-  // 循环到 planningHorizon 以包含最后一年的Q1到期事件
+  quarterSchedules.set(1, {
+    q2: threeMonthDeposit ? threeMonthDeposit.amount : 0,
+    q3: sixMonthDeposit ? sixMonthDeposit.amount : 0,
+    q4: sixMonthDeposit ? Math.max(0, sixMonthDeposit.amount - quarterlyExpense) : 0
+  });
+
+  const getQuarterSchedule = (year) => {
+    if (!quarterSchedules.has(year)) {
+      quarterSchedules.set(year, { q2: 0, q3: 0, q4: 0 });
+    }
+    return quarterSchedules.get(year);
+  };
+
+  const addQuarterSchedule = (year, key, amount) => {
+    if (year > planningHorizon || amount <= 0) return;
+    const schedule = getQuarterSchedule(year);
+    schedule[key] = (schedule[key] || 0) + amount;
+  };
+
+  const buildRolloverPlan = (principal, interest) => {
+    const demandGap = Math.max(0, requiredDemand - (simulatedDemandBalance + interest));
+    const principalToDemand = Math.min(principal, demandGap);
+    let remainingPrincipal = Math.max(0, principal - principalToDemand);
+
+    const rollTo3Month = Math.min(remainingPrincipal, quarterlyExpense);
+    remainingPrincipal -= rollTo3Month;
+
+    const rollTo6Month = Math.min(remainingPrincipal, quarterlyExpense * 2);
+    remainingPrincipal -= rollTo6Month;
+
+    return {
+      rollToCurrent: interest + principalToDemand,
+      principalToDemand,
+      rollTo3Month,
+      rollTo6Month,
+      rollToQ4: Math.max(0, rollTo6Month - quarterlyExpense),
+      rollTo1Year: remainingPrincipal
+    };
+  };
+
+  const buildAnnualActionDetails = (principal, interest, totalWithInterest, year, plan) => {
+    const lines = [
+      '【到期处理】',
+      `• 本金: ¥${formatAmount(principal)}`,
+      `• 利息: ¥${formatAmount(interest)}`,
+      `• 本息合计: ¥${formatAmount(totalWithInterest)}`,
+      '',
+      '【资金分配】'
+    ];
+
+    if (plan.rollToCurrent > 0) {
+      const currentParts = [];
+      if (interest > 0) currentParts.push(`利息¥${formatAmount(interest)}`);
+      if (plan.principalToDemand > 0) currentParts.push(`补足活期目标¥${formatAmount(plan.principalToDemand)}`);
+      lines.push(`• 活期存款: ¥${formatAmount(plan.rollToCurrent)}${currentParts.length ? ` (${currentParts.join(' + ')})` : ''}`);
+    }
+    if (plan.rollTo3Month > 0) {
+      lines.push(`• 3个月定期: ¥${formatAmount(plan.rollTo3Month)} (${year + 1}年Q2支出)`);
+    }
+    if (plan.rollTo6Month > 0) {
+      lines.push(`• 6个月定期: ¥${formatAmount(plan.rollTo6Month)} (${year + 1}年Q3/Q4支出)`);
+    }
+    if (plan.rollTo1Year > 0) {
+      lines.push(`• 1年定期: ¥${formatAmount(plan.rollTo1Year)} (${year + 2}年循环储备)`);
+    }
+
+    return lines.join('\n');
+  };
+
+  const pushQuarterEvent = ({ maturityDate, dateDisplay, year, quarter, title, description, depositType, amount, rate, projectedInterest, action, allocationLines }) => {
+    executionList.push({
+      id: idCounter++,
+      date: formatDate(maturityDate, 'YYYY-MM-DD'),
+      dateDisplay,
+      year,
+      quarter,
+      title,
+      description,
+      depositType,
+      amount,
+      rate,
+      projectedInterest,
+      action,
+      actionDetails: allocationLines.join('\n'),
+      isCompleted: false,
+      actualInterest: null
+    });
+  };
+
   for (let year = 1; year <= planningHorizon; year++) {
     const yearStartDate = addMonths(currentDate, (year - 1) * 12);
     const yearLabel = currentYear + year - 1;
-
-    // 计算到期月份（与起始月份相同）
     const maturityMonth = startMonth;
     const maturityYear = yearLabel + 1;
+    const currentSchedule = getQuarterSchedule(year);
 
-    // ===== Q1: 年度定期到期处理 =====
-    // 1年定期到期（每年Q1，即下一年的同月）
+    simulatedDemandBalance = Math.max(0, simulatedDemandBalance - quarterlyExpense);
+
+    const q2BaseAmount = currentSchedule.q2 || 0;
+    if (q2BaseAmount > 0) {
+      const q2Interest = calculateInterest(q2BaseAmount, INTEREST_RATES.threeMonths, 0.25);
+      const q2Maturity = addMonths(yearStartDate, 3);
+      const q2Expense = Math.min(q2BaseAmount, quarterlyExpense);
+      const q2SurplusToCurrent = Math.max(0, q2BaseAmount - q2Expense);
+      const q2ToCurrent = q2Interest + q2SurplusToCurrent;
+      const q2Month = startMonth + 3;
+      const q2Year = q2Month > 12 ? yearLabel + 1 : yearLabel;
+      const q2DisplayMonth = q2Month > 12 ? q2Month - 12 : q2Month;
+
+      simulatedDemandBalance += q2ToCurrent;
+
+      const q2Lines = [
+        '【到期处理】',
+        `• 本金: ¥${formatAmount(q2BaseAmount)}`,
+        `• 利息: ¥${formatAmount(q2Interest)}`,
+        `• 本息合计: ¥${formatAmount(q2BaseAmount + q2Interest)}`,
+        '',
+        '【资金分配】'
+      ];
+      if (q2ToCurrent > 0) {
+        const q2Note = q2Expense > 0 ? '补足本季度储备' : (q2SurplusToCurrent > 0 ? '利息 + 剩余本金' : '利息');
+        q2Lines.push(`• 活期存款: ¥${formatAmount(q2ToCurrent)} (${q2Note})`);
+      }
+
+      pushQuarterEvent({
+        maturityDate: q2Maturity,
+        dateDisplay: `${q2Year}年${q2DisplayMonth}月`,
+        year,
+        quarter: 2,
+        title: `第${year}年 - Q2季度到期`,
+        description: '优先覆盖Q2支出，剩余资金回到活期',
+        depositType: '3个月定期',
+        amount: q2BaseAmount,
+        rate: INTEREST_RATES.threeMonths,
+        projectedInterest: q2Interest,
+        action: '到期兑付',
+        allocationLines: q2Lines
+      });
+    }
+
+    const q3BaseAmount = currentSchedule.q3 || 0;
+    if (q3BaseAmount > 0) {
+      const q3Interest = calculateInterest(q3BaseAmount, INTEREST_RATES.sixMonths, 0.5);
+      const q3Maturity = addMonths(yearStartDate, 6);
+      const q3Expense = Math.min(q3BaseAmount, quarterlyExpense);
+      const q3RemainingPrincipal = Math.max(0, q3BaseAmount - q3Expense);
+      const q3PlannedQ4 = Math.min(q3RemainingPrincipal, currentSchedule.q4 || 0);
+      const q3SurplusToCurrent = Math.max(0, q3RemainingPrincipal - q3PlannedQ4);
+      const q3ToCurrent = q3Interest + q3SurplusToCurrent;
+      const q3Month = startMonth + 6;
+      const q3Year = q3Month > 12 ? yearLabel + 1 : yearLabel;
+      const q3DisplayMonth = q3Month > 12 ? q3Month - 12 : q3Month;
+
+      simulatedDemandBalance += q3ToCurrent;
+
+      const q3Lines = [
+        '【到期处理】',
+        `• 本金: ¥${formatAmount(q3BaseAmount)}`,
+        `• 利息: ¥${formatAmount(q3Interest)}`,
+        `• 本息合计: ¥${formatAmount(q3BaseAmount + q3Interest)}`,
+        '',
+        '【资金分配】'
+      ];
+      if (q3ToCurrent > 0) {
+        const q3Note = q3Expense > 0 ? '补足本季度储备' : (q3SurplusToCurrent > 0 ? '利息 + 剩余本金' : '利息');
+        q3Lines.push(`• 活期存款: ¥${formatAmount(q3ToCurrent)} (${q3Note})`);
+      }
+      if (q3PlannedQ4 > 0) {
+        q3Lines.push(`• 3个月定期: ¥${formatAmount(q3PlannedQ4)} (${year}年Q4支出)`);
+      }
+
+      pushQuarterEvent({
+        maturityDate: q3Maturity,
+        dateDisplay: `${q3Year}年${q3DisplayMonth}月`,
+        year,
+        quarter: 3,
+        title: `第${year}年 - Q3季度到期`,
+        description: '先覆盖Q3支出，再为Q4预留或回补活期',
+        depositType: '6个月定期',
+        amount: q3BaseAmount,
+        rate: INTEREST_RATES.sixMonths,
+        projectedInterest: q3Interest,
+        action: '到期兑付+转存',
+        allocationLines: q3Lines
+      });
+    }
+
+    const q4BaseAmount = currentSchedule.q4 || 0;
+    if (q4BaseAmount > 0) {
+      const q4Interest = calculateInterest(q4BaseAmount, INTEREST_RATES.threeMonths, 0.25);
+      const q4Maturity = addMonths(yearStartDate, 9);
+      const q4Expense = Math.min(q4BaseAmount, quarterlyExpense);
+      const q4ToCurrent = q4Interest + Math.max(0, q4BaseAmount - q4Expense);
+      const q4Month = startMonth + 9;
+      const q4Year = q4Month > 12 ? yearLabel + 1 : yearLabel;
+      const q4DisplayMonth = q4Month > 12 ? q4Month - 12 : q4Month;
+
+      simulatedDemandBalance += q4ToCurrent;
+
+      const q4Lines = [
+        '【到期处理】',
+        `• 本金: ¥${formatAmount(q4BaseAmount)}`,
+        `• 利息: ¥${formatAmount(q4Interest)}`,
+        `• 本息合计: ¥${formatAmount(q4BaseAmount + q4Interest)}`,
+        '',
+        '【资金分配】'
+      ];
+      if (q4ToCurrent > 0) {
+        const q4Note = q4Expense > 0 ? '补足本季度储备' : (q4Interest > 0 ? '利息' : '剩余本金');
+        q4Lines.push(`• 活期存款: ¥${formatAmount(q4ToCurrent)} (${q4Note})`);
+      }
+
+      pushQuarterEvent({
+        maturityDate: q4Maturity,
+        dateDisplay: `${q4Year}年${q4DisplayMonth}月`,
+        year,
+        quarter: 4,
+        title: `第${year}年 - Q4季度到期`,
+        description: '优先覆盖Q4支出，利息留在活期',
+        depositType: '3个月定期',
+        amount: q4BaseAmount,
+        rate: INTEREST_RATES.threeMonths,
+        projectedInterest: q4Interest,
+        action: '到期兑付',
+        allocationLines: q4Lines
+      });
+    }
+
+    const maturityDate = addMonths(yearStartDate, 12);
+    let nextOneYearBalance = 0;
+
     if (oneYearBalance > 0) {
       const yearAmount = oneYearBalance;
       const yearInterest = calculateInterest(yearAmount, INTEREST_RATES.oneYear, 1);
       const totalWithInterest = yearAmount + yearInterest;
-      const maturityDate = addMonths(yearStartDate, 12);
 
-      // 新规则：利息全部转入活期，本金按季度滚动规则分配
-      // 活期 = 利息 + 季度支出（用于短期支出）
-      let rollToCurrent = yearInterest + quarterlyExpense;
-      // 本金减去季度支出后用于续存（Q1支出已计入活期，不再从本金重复分配）
-      let remaining = yearAmount - quarterlyExpense;  // 本金扣除Q1支出后用于滚动
-
-      let rollTo3Month = 0;
-      let rollTo6Month = 0;
-      let rollTo1Year = 0;
-      if (remaining > 0) {
-        // 3个月定期（用于下一季度支出）
-        rollTo3Month = Math.min(remaining, quarterlyExpense);
-        remaining -= rollTo3Month;
-      }
-      if (remaining > 0) {
-        // 6个月定期（用于下下季度支出 + 转存）
-        rollTo6Month = Math.min(remaining, quarterlyExpense * 2);
-        remaining -= rollTo6Month;
-      }
-      // 剩余全部存1年定期
-      rollTo1Year = remaining;
-
-      // 如果是最后一年，显示为到期兑付；否则显示为到期兑付+续存
       if (year === planningHorizon) {
-        // 最后一年：全部取出，利息+本金都转入活期
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
           dateDisplay: `${maturityYear}年${maturityMonth}月`,
-          year: year,
+          year,
           quarter: 1,
           title: `第${year}年 - 1年定期到期`,
           description: `到期本息¥${formatAmount(totalWithInterest)}，全部转入活期`,
@@ -1105,47 +1313,46 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
           isCompleted: false,
           actualInterest: null
         });
-        oneYearBalance = 0;
+        simulatedDemandBalance += totalWithInterest;
       } else {
-        // 续存 - 显示详细分配（本金续存，利息转入活期）
+        const rolloverPlan = buildRolloverPlan(yearAmount, yearInterest);
+        simulatedDemandBalance += rolloverPlan.rollToCurrent;
+        addQuarterSchedule(year + 1, 'q2', rolloverPlan.rollTo3Month);
+        addQuarterSchedule(year + 1, 'q3', rolloverPlan.rollTo6Month);
+        addQuarterSchedule(year + 1, 'q4', rolloverPlan.rollToQ4);
+        nextOneYearBalance += rolloverPlan.rollTo1Year;
+
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
           dateDisplay: `${maturityYear}年${maturityMonth}月`,
-          year: year,
+          year,
           quarter: 1,
           title: `第${year}年 - 1年定期到期`,
-          description: `本金续存，利息¥${formatAmount(yearInterest)}转入活期`,
+          description: '先补足活期目标，再滚动下一轮季度支出',
           depositType: '1年定期',
           amount: yearAmount,
           rate: INTEREST_RATES.oneYear,
           projectedInterest: yearInterest,
           action: '到期兑付+续存',
-          actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(yearAmount)}\n• 利息: ¥${formatAmount(yearInterest)}\n• 本息合计: ¥${formatAmount(totalWithInterest)}\n\n【资金分配】\n• 活期存款(利息+季度支出): ¥${formatAmount(rollToCurrent)}\n  (利息¥${formatAmount(yearInterest)} + Q1支出¥${formatAmount(quarterlyExpense)})\n• 3个月定期: ¥${formatAmount(rollTo3Month)}\n  (${year + 1}年Q2支出)\n• 6个月定期: ¥${formatAmount(rollTo6Month)}\n  (${year + 1}年Q3支出+转存)\n• 1年定期: ¥${formatAmount(rollTo1Year)}\n  (${year + 2}年支出+循环)`,
+          actionDetails: buildAnnualActionDetails(yearAmount, yearInterest, totalWithInterest, year, rolloverPlan),
           isCompleted: false,
           actualInterest: null
         });
-        oneYearBalance = rollTo1Year;
       }
     }
 
-    // 3年定期到期（每3年Q1，或在最后一年）
-    // 对于3年计划，第3年（最后一年）时3年定期也应该到期
     if (threeYearBalance > 0 && (year === planningHorizon || (year > 1 && (year - 1) % 3 === 0))) {
-      const yearsOwned = 3;
       const year3Amount = threeYearBalance;
-      const year3Interest = calculateInterest(year3Amount, INTEREST_RATES.threeYears, yearsOwned);
-      const maturityDate = addMonths(yearStartDate, 12);
+      const year3Interest = calculateInterest(year3Amount, INTEREST_RATES.threeYears, 3);
       const totalWithInterest = year3Amount + year3Interest;
-      const maturityYearLabel = yearLabel + 1;
 
       if (year === planningHorizon) {
-        // 最后一年：全部到期兑付，转入活期
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
-          dateDisplay: `${maturityYearLabel}年${maturityMonth}月`,
-          year: year,
+          dateDisplay: `${maturityYear}年${maturityMonth}月`,
+          year,
           quarter: 1,
           title: `第${year}年 - 3年定期到期（终结）`,
           description: `到期本息¥${formatAmount(totalWithInterest)}，全部转入活期`,
@@ -1158,69 +1365,47 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
           isCompleted: false,
           actualInterest: null
         });
-        threeYearBalance = 0;
+        simulatedDemandBalance += totalWithInterest;
       } else {
-        // 续存3年 - 本金续存，利息转入活期
-        const forExpense = annualExpense * 3;
-        // 只滚动本金，利息转入活期
-        const forRollover = year3Amount;  // 只滚动本金
-        const interestToCurrent = year3Interest;  // 利息转入活期
-
-        // 活期 = 利息 + 一个季度支出
-        let rollToCurrent = interestToCurrent + quarterlyExpense;
-        // 本金减去季度支出后用于续存（Q1支出已计入活期，不再从本金重复分配）
-        let remaining = forRollover - quarterlyExpense;  // 本金扣除Q1支出后用于滚动
-        let rollTo3Month = 0;
-        let rollTo6Month = 0;
-        let rollTo1Year = 0;
-        if (remaining > 0) {
-          rollTo3Month = Math.min(remaining, quarterlyExpense);
-          remaining -= rollTo3Month;
-        }
-        if (remaining > 0) {
-          rollTo6Month = Math.min(remaining, quarterlyExpense * 2);
-          remaining -= rollTo6Month;
-        }
-        rollTo1Year = remaining;
+        const rolloverPlan = buildRolloverPlan(year3Amount, year3Interest);
+        simulatedDemandBalance += rolloverPlan.rollToCurrent;
+        addQuarterSchedule(year + 1, 'q2', rolloverPlan.rollTo3Month);
+        addQuarterSchedule(year + 1, 'q3', rolloverPlan.rollTo6Month);
+        addQuarterSchedule(year + 1, 'q4', rolloverPlan.rollToQ4);
+        nextOneYearBalance += rolloverPlan.rollTo1Year;
 
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
-          dateDisplay: `${maturityYearLabel}年${maturityMonth}月`,
-          year: year,
+          dateDisplay: `${maturityYear}年${maturityMonth}月`,
+          year,
           quarter: 1,
           title: `第${year}年 - 3年定期到期`,
-          description: `本金续存，利息¥${formatAmount(year3Interest)}转入活期`,
+          description: '到期后改按季度循环，不再把本金静态留在长期',
           depositType: '3年定期',
           amount: year3Amount,
           rate: INTEREST_RATES.threeYears,
           projectedInterest: year3Interest,
           action: '到期兑付+续存',
-          actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(year3Amount)}\n• 利息: ¥${formatAmount(year3Interest)}\n• 本息合计: ¥${formatAmount(totalWithInterest)}\n\n【资金分配】\n• 活期存款(利息+季度支出): ¥${formatAmount(rollToCurrent)}\n  (利息¥${formatAmount(interestToCurrent)} + Q1支出¥${formatAmount(quarterlyExpense)})\n• 3个月定期: ¥${formatAmount(rollTo3Month)}\n• 6个月定期: ¥${formatAmount(rollTo6Month)}\n• 1年定期: ¥${formatAmount(rollTo1Year)}`,
+          actionDetails: buildAnnualActionDetails(year3Amount, year3Interest, totalWithInterest, year, rolloverPlan),
           isCompleted: false,
           actualInterest: null
         });
-        threeYearBalance = forRollover;
       }
+      threeYearBalance = 0;
     }
 
-    // 5年定期到期（每5年Q1，或在最后一年）
-    // 对于短期计划，最后一年时5年定期也应该到期
     if (fiveYearBalance > 0 && (year === planningHorizon || (year > 1 && (year - 1) % 5 === 0))) {
-      const yearsOwned = 5;
       const year5Amount = fiveYearBalance;
-      const year5Interest = calculateInterest(year5Amount, INTEREST_RATES.fiveYears, yearsOwned);
-      const maturityDate = addMonths(yearStartDate, 12);
+      const year5Interest = calculateInterest(year5Amount, INTEREST_RATES.fiveYears, 5);
       const totalWithInterest = year5Amount + year5Interest;
-      const maturityYearLabel = yearLabel + 1;
 
       if (year === planningHorizon) {
-        // 最后一年：全部到期兑付，转入活期
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
-          dateDisplay: `${maturityYearLabel}年${maturityMonth}月`,
-          year: year,
+          dateDisplay: `${maturityYear}年${maturityMonth}月`,
+          year,
           quarter: 1,
           title: `第${year}年 - 5年定期到期（终结）`,
           description: `到期本息¥${formatAmount(totalWithInterest)}，全部转入活期`,
@@ -1233,190 +1418,49 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
           isCompleted: false,
           actualInterest: null
         });
-        fiveYearBalance = 0;
+        simulatedDemandBalance += totalWithInterest;
       } else {
-        // 续存5年 - 本金续存，利息转入活期
-        const forExpense = annualExpense * 5;
-        // 只滚动本金，利息转入活期
-        const forRollover = year5Amount;  // 只滚动本金
-        const interestToCurrent = year5Interest;  // 利息转入活期
-
-        // 活期 = 利息 + 一个季度支出
-        let rollToCurrent = interestToCurrent + quarterlyExpense;
-        // 本金减去季度支出后用于续存（Q1支出已计入活期，不再从本金重复分配）
-        let remaining = forRollover - quarterlyExpense;  // 本金扣除Q1支出后用于滚动
-        let rollTo3Month = 0;
-        let rollTo6Month = 0;
-        let rollTo1Year = 0;
-        if (remaining > 0) {
-          rollTo3Month = Math.min(remaining, quarterlyExpense);
-          remaining -= rollTo3Month;
-        }
-        if (remaining > 0) {
-          rollTo6Month = Math.min(remaining, quarterlyExpense * 2);
-          remaining -= rollTo6Month;
-        }
-        rollTo1Year = remaining;
+        const rolloverPlan = buildRolloverPlan(year5Amount, year5Interest);
+        simulatedDemandBalance += rolloverPlan.rollToCurrent;
+        addQuarterSchedule(year + 1, 'q2', rolloverPlan.rollTo3Month);
+        addQuarterSchedule(year + 1, 'q3', rolloverPlan.rollTo6Month);
+        addQuarterSchedule(year + 1, 'q4', rolloverPlan.rollToQ4);
+        nextOneYearBalance += rolloverPlan.rollTo1Year;
 
         executionList.push({
           id: idCounter++,
           date: formatDate(maturityDate, 'YYYY-MM-DD'),
-          dateDisplay: `${maturityYearLabel}年${maturityMonth}月`,
-          year: year,
+          dateDisplay: `${maturityYear}年${maturityMonth}月`,
+          year,
           quarter: 1,
           title: `第${year}年 - 5年定期到期`,
-          description: `本金续存，利息¥${formatAmount(year5Interest)}转入活期`,
+          description: '到期后改按季度循环，不再默认长期沉淀',
           depositType: '5年定期',
           amount: year5Amount,
           rate: INTEREST_RATES.fiveYears,
           projectedInterest: year5Interest,
           action: '到期兑付+续存',
-          actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(year5Amount)}\n• 利息: ¥${formatAmount(year5Interest)}\n• 本息合计: ¥${formatAmount(totalWithInterest)}\n\n【资金分配】\n• 活期存款(利息+季度支出): ¥${formatAmount(rollToCurrent)}\n  (利息¥${formatAmount(interestToCurrent)} + Q1支出¥${formatAmount(quarterlyExpense)})\n• 3个月定期: ¥${formatAmount(rollTo3Month)}\n• 6个月定期: ¥${formatAmount(rollTo6Month)}\n• 1年定期: ¥${formatAmount(rollTo1Year)}`,
+          actionDetails: buildAnnualActionDetails(year5Amount, year5Interest, totalWithInterest, year, rolloverPlan),
           isCompleted: false,
           actualInterest: null
         });
-        fiveYearBalance = forRollover;
       }
+      fiveYearBalance = 0;
     }
 
-    // ===== Q2: 3个月定期到期（每年） =====
-    // 仅在规划的年份内显示Q2-Q4（不包括最后一年+1的额外Q1）
-    if (year <= planningHorizon) {
-    // 第1年用初始存款，之后用续存的3个月
-    let q2BaseAmount = 0;
-    if (year === 1 && threeMonthDeposit) {
-      q2BaseAmount = threeMonthDeposit.amount;
-    } else if (year > 1) {
-      // 从上一年的1年定期到期后分配
-      q2BaseAmount = quarterlyExpense;
-    }
-
-    if (q2BaseAmount > 0) {
-      const q2Interest = calculateInterest(q2BaseAmount, INTEREST_RATES.threeMonths, 0.25);
-      const q2Maturity = addMonths(yearStartDate, 3);
-      // Q2(3个月定期)全部转入活期，不做分割
-      // 调整从6个月或更长期限的存款来做
-      const toCurrent = q2BaseAmount + q2Interest;  // 本金+利息全部转入活期
-      const q2Month = startMonth + 3;
-      const q2Year = q2Month > 12 ? yearLabel + 1 : yearLabel;
-      const q2DisplayMonth = q2Month > 12 ? q2Month - 12 : q2Month;
-
-      executionList.push({
-        id: idCounter++,
-        date: formatDate(q2Maturity, 'YYYY-MM-DD'),
-        dateDisplay: `${q2Year}年${q2DisplayMonth}月`,
-        year: year,
-        quarter: 2,
-        title: `第${year}年 - Q2季度到期`,
-        description: `本息合计¥${formatAmount(toCurrent)}全部转入活期`,
-        depositType: '3个月定期',
-        amount: q2BaseAmount,
-        rate: INTEREST_RATES.threeMonths,
-        projectedInterest: q2Interest,
-        action: '到期兑付',
-        actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(q2BaseAmount)}\n• 利息: ¥${formatAmount(q2Interest)}\n• 本息合计: ¥${formatAmount(q2BaseAmount + q2Interest)}\n\n【资金用途】\n• 活期存款(本金+利息): ¥${formatAmount(toCurrent)}`,
-        isCompleted: false,
-        actualInterest: null
-      });
-    }
-    }  // 关闭 Q2 的条件判断
-
-    // ===== Q3: 6个月定期到期（每年） =====
-    if (year <= planningHorizon) {
-    let q3BaseAmount = 0;
-    if (year === 1 && sixMonthDeposit) {
-      q3BaseAmount = sixMonthDeposit.amount;
-    } else if (year > 1) {
-      // 从上一年的1年定期到期后分配
-      q3BaseAmount = quarterlyExpense * 2;
-    }
-
-    if (q3BaseAmount > 0) {
-      const q3Interest = calculateInterest(q3BaseAmount, INTEREST_RATES.sixMonths, 0.5);
-      const q3Maturity = addMonths(yearStartDate, 6);
-      const forExpense = quarterlyExpense;
-      // 新规则：利息转入活期，本金用于支出和续存
-      const toCurrent = q3Interest;  // 利息转入活期
-      const remaining = q3BaseAmount - forExpense;  // 本金减去支出
-      const forRollover = remaining > 0 ? remaining : 0;
-      const q3Month = startMonth + 6;
-      const q3Year = q3Month > 12 ? yearLabel + 1 : yearLabel;
-      const q3DisplayMonth = q3Month > 12 ? q3Month - 12 : q3Month;
-
-      executionList.push({
-        id: idCounter++,
-        date: formatDate(q3Maturity, 'YYYY-MM-DD'),
-        dateDisplay: `${q3Year}年${q3DisplayMonth}月`,
-        year: year,
-        quarter: 3,
-        title: `第${year}年 - Q3季度到期`,
-        description: `本金用于支出，利息¥${formatAmount(q3Interest)}转入活期`,
-        depositType: '6个月定期',
-        amount: q3BaseAmount,
-        rate: INTEREST_RATES.sixMonths,
-        projectedInterest: q3Interest,
-        action: '到期兑付+转存',
-        actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(q3BaseAmount)}\n• 利息: ¥${formatAmount(q3Interest)}\n• 本息合计: ¥${formatAmount(q3BaseAmount + q3Interest)}\n\n【资金分配】\n• 活期存款(利息): ¥${formatAmount(toCurrent)}\n• 支出(Q3): ¥${formatAmount(forExpense)}\n• 转存3个月: ¥${formatAmount(forRollover)}`,
-        isCompleted: false,
-        actualInterest: null
-      });
-    }
-    }  // 关闭 Q3 的条件判断
-
-    // ===== Q4: 3个月定期到期（每年） =====
-    if (year <= planningHorizon) {
-    let q4BaseAmount = 0;
-    if (year === 1) {
-      // 初始6个月定期到期后的续存
-      q4BaseAmount = sixMonthDeposit ? (sixMonthDeposit.amount - quarterlyExpense) : 0;
-    } else {
-      // 从上一年的1年定期到期后分配的Q4部分
-      q4BaseAmount = quarterlyExpense;
-    }
-
-    if (q4BaseAmount > 0) {
-      const q4Interest = calculateInterest(q4BaseAmount, INTEREST_RATES.threeMonths, 0.25);
-      const q4Maturity = addMonths(yearStartDate, 9);
-      const q4Month = startMonth + 9;
-      const q4Year = q4Month > 12 ? yearLabel + 1 : yearLabel;
-      const q4DisplayMonth = q4Month > 12 ? q4Month - 12 : q4Month;
-
-      // 新规则：利息转入活期，本金也转入活期（用于下一年Q1支出）
-      const toCurrent = q4BaseAmount + q4Interest;  // 本金+利息都转入活期
-
-      executionList.push({
-        id: idCounter++,
-        date: formatDate(q4Maturity, 'YYYY-MM-DD'),
-        dateDisplay: `${q4Year}年${q4DisplayMonth}月`,
-        year: year,
-        quarter: 4,
-        title: `第${year}年 - Q4季度到期`,
-        description: `本金+利息¥${formatAmount(toCurrent)}转入活期，用于${year + 1}年Q1支出`,
-        depositType: '3个月定期',
-        amount: q4BaseAmount,
-        rate: INTEREST_RATES.threeMonths,
-        projectedInterest: q4Interest,
-        action: '到期兑付',
-        actionDetails: `【到期处理】\n• 本金: ¥${formatAmount(q4BaseAmount)}\n• 利息: ¥${formatAmount(q4Interest)}\n• 本息合计: ¥${formatAmount(q4BaseAmount + q4Interest)}\n\n【资金用途】\n• 活期存款(本金+利息): ¥${formatAmount(toCurrent)}\n• 用于${year + 1}年Q1支出`,
-        isCompleted: false,
-        actualInterest: null
-      });
-    }
-    }  // 关闭 Q4 的条件判断
+    oneYearBalance = nextOneYearBalance;
   }
 
-  // === 新增：添加现有存款到期事件 ===
   existingPortfolio.forEach(deposit => {
-    if (deposit.type === '活期存款') return; // 活期存款没有到期日
+    const normalizedType = normalizeDepositType(deposit.type);
+    if (normalizedType === '活期存款') return;
 
     const maturityDate = deposit.maturityDate ? new Date(deposit.maturityDate) : null;
     if (!maturityDate) return;
 
-    const rate = (deposit.interestRate || getRateForType(deposit.type)) / 100;
-    const projectedInterest = deposit.amount * rate * (getYearsForType(deposit.type) || 1);
+    const rate = (deposit.interestRate || getRateForType(normalizedType)) / 100;
+    const projectedInterest = deposit.amount * rate * (getYearsForType(normalizedType) || 0);
     const totalWithInterest = deposit.amount + projectedInterest;
-
-    // 计算到期年季度
     const maturityYear = maturityDate.getFullYear();
     const maturityMonth = maturityDate.getMonth() + 1;
     const maturityQuarter = Math.ceil(maturityMonth / 3);
@@ -1428,7 +1472,7 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
       title: `${deposit.type}到期`,
       year: maturityYear - currentYear + 1,
       quarter: maturityQuarter,
-      description: `现有存款到期`,
+      description: '现有存款到期',
       depositType: deposit.type,
       amount: deposit.amount,
       projectedInterest,
@@ -1440,14 +1484,12 @@ function generateExecutionList(inputData, allocation, existingPortfolio = []) {
     });
   });
 
-  // 按日期排序
   executionList.sort((a, b) => {
     const dateA = new Date(a.date);
     const dateB = new Date(b.date);
     return dateA - dateB;
   });
 
-  // 重新分配ID
   executionList.forEach((item, index) => {
     item.id = index + 1;
   });
@@ -1526,7 +1568,7 @@ function processEarlyWithdrawal(deposit, withdrawalAmount, withdrawalDate) {
 
   // 检查是否可以从该存款类型支取（仅允许从长期存款支取）
   const longTermTypes = ['1年定期', '3年定期', '5年定期'];
-  if (!longTermTypes.includes(deposit.type)) {
+  if (!longTermTypes.includes(normalizeDepositType(deposit.type))) {
     console.warn('仅允许从长期存款（1年/3年/5年）提前支取');
     return deposit;
   }
@@ -1605,7 +1647,7 @@ function getWithdrawableDeposits(deposits) {
   // 过滤长期存款，只返回active或partial_withdrawn状态且有余额的存款
   // 注意：如果status未定义，默认当作active处理
   const filteredDeposits = deposits
-    .filter(d => longTermTypes.includes(d.type))
+    .filter(d => longTermTypes.includes(normalizeDepositType(d.type)))
     .filter(d => {
       // 如果status未定义，默认当作active
       const status = d.status || 'active';
@@ -1622,21 +1664,22 @@ function getWithdrawableDeposits(deposits) {
   const mergedByType = {};
   filteredDeposits.forEach(d => {
     const balance = d.remainingBalance !== undefined ? d.remainingBalance : (d.amount || 0);
-    if (mergedByType[d.type]) {
+    const type = normalizeDepositType(d.type);
+    if (mergedByType[type]) {
       // 累加金额
-      mergedByType[d.type].remainingBalance += balance;
-      mergedByType[d.type].originalAmount += (d.originalAmount || d.amount || 0);
+      mergedByType[type].remainingBalance += balance;
+      mergedByType[type].originalAmount += (d.originalAmount || d.amount || 0);
       // 更新到期日为最近的
       if (d.maturityDateStr && d.maturityDateStr !== '随时可用') {
-        mergedByType[d.type].maturityDateStr = d.maturityDateStr;
-        mergedByType[d.type].maturityDate = d.maturityDate;
+        mergedByType[type].maturityDateStr = d.maturityDateStr;
+        mergedByType[type].maturityDate = d.maturityDate;
       }
     } else {
-      mergedByType[d.type] = {
-        type: d.type,
+      mergedByType[type] = {
+        type: type,
         originalAmount: d.originalAmount || d.amount || 0,
         remainingBalance: balance,
-        rate: getRateForType(d.type),
+        rate: getRateForType(type),
         maturityDate: d.maturityDate,
         maturityDateStr: d.maturityDateStr,
         depositDate: d.depositDate
@@ -1707,23 +1750,26 @@ function addToDestinationDeposit(allocation, destinationType, amount) {
  * @returns {Object} 新的存款对象
  */
 function createNewDeposit(type, amount) {
-  const rate = getRateForType(type);
+  const roundedAmount = roundToNearestThousand(amount);
+  const normalizedType = normalizeDepositType(type);
+  const rate = getRateForType(normalizedType);
   // 计算存款期限（月）
   let months = 0;
-  if (type === '3个月定期') months = 3;
-  else if (type === '6个月定期') months = 6;
-  else if (type === '1年定期') months = 12;
-  else if (type === '3年定期') months = 36;
-  else if (type === '5年定期') months = 60;
+  if (normalizedType === '3个月定期') months = 3;
+  else if (normalizedType === '6个月定期') months = 6;
+  else if (normalizedType === '1年定期') months = 12;
+  else if (normalizedType === '2年定期') months = 24;
+  else if (normalizedType === '3年定期') months = 36;
+  else if (normalizedType === '5年定期') months = 60;
 
   const maturityDate = new Date();
   maturityDate.setMonth(maturityDate.getMonth() + months);
 
   return {
-    type: type,
-    amount: amount,
-    originalAmount: amount,
-    remainingBalance: amount,
+    type: normalizedType,
+    amount: roundedAmount,
+    originalAmount: roundedAmount,
+    remainingBalance: roundedAmount,
     rate: rate,
     maturityDate: formatDate(maturityDate, 'YYYY-MM-DD'),
     maturityDateStr: formatDate(maturityDate, 'YYYY年MM月DD日'),
@@ -1731,7 +1777,7 @@ function createNewDeposit(type, amount) {
     status: 'active',
     withdrawnAmount: 0,
     withdrawalHistory: [],
-    topUpAmount: amount
+    topUpAmount: roundedAmount
   };
 }
 
@@ -1757,6 +1803,8 @@ export {
   getRateForType,
   getYearsForType,
   getMonthsForType,
+  normalizeDepositType,
+  roundToNearestThousand,
   generateExecutionList,
   generateCashFlowTimeline,
   DEPOSIT_TYPES

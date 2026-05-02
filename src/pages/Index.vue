@@ -4,6 +4,7 @@ import {
   formatAmount,
   formatDate,
   generatePlan,
+  normalizeDepositType,
   validateInput
 } from '../utils/format'
 import { storage } from '../utils/storage'
@@ -11,6 +12,8 @@ import { showToast } from '../utils/toast'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
+
+const savedExecutionPlan = ref(null)
 
 // Form data
 const totalCash = ref('')
@@ -46,12 +49,14 @@ const allocation = ref([])
 const cashFlowTimeline = ref([])
 const executionList = ref([])
 const showProrata = ref(false)
+const latestPlan = ref(null)
 
 // Existing portfolio
 const showExistingPortfolio = ref(false)
 const existingPortfolio = ref([])
 const showAddDepositModal = ref(false)
 const editingDepositIndex = ref(-1)
+const csvFileInput = ref(null)
 
 // New deposit form
 const newDeposit = ref({
@@ -78,6 +83,22 @@ const existingPortfolioTotal = computed(() => {
   return existingPortfolio.value
     .filter(d => d.type !== '活期存款')
     .reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0)
+})
+
+const debugShape = (value) => {
+  if (value === null || value === undefined) return 'none'
+  if (Array.isArray(value)) return `array(${value.length})`
+  if (typeof value === 'object') return `obj(${Object.keys(value).length})`
+  return typeof value
+}
+
+const currentHoldings = computed(() => [
+  ...(demandDeposit.value ? [{ type: '活期存款', amount: demandDeposit.value }] : []),
+  ...existingPortfolio.value
+])
+
+const debugStatusLine = computed(() => {
+  return `executionPlan:${debugShape(savedExecutionPlan.value)} currentHoldings:${debugShape(currentHoldings.value)} transitionPlan:${debugShape(savedExecutionPlan.value?.transitionPlan)}`
 })
 
 const totalCashComputed = computed(() => {
@@ -137,24 +158,28 @@ const calculateExpenses = () => {
 }
 
 // Input handlers
-const onTotalCashInput = () => {
+const onTotalCashInput = (e) => {
+  demandDeposit.value = e.target.value
   calculateExpenses()
 }
 
-const onHousingExpenseInput = () => {
+const onHousingExpenseInput = (e) => {
+  housingExpense.value = e.target.value
   calculateExpenses()
 }
 
-const onFoodExpenseInput = () => {
+const onFoodExpenseInput = (e) => {
+  foodExpense.value = e.target.value
   calculateExpenses()
 }
 
-const onOtherExpenseInput = () => {
+const onOtherExpenseInput = (e) => {
+  otherExpense.value = e.target.value
   calculateExpenses()
 }
 
-const onEmergencyFundInput = () => {
-  // No-op, value is read directly
+const onEmergencyFundInput = (e) => {
+  emergencyFund.value = e.target.value
 }
 
 const onHorizonSelect = (value) => {
@@ -327,9 +352,14 @@ const generatePlanHandler = () => {
     console.log('=== Generating plan with inputData ===', inputData)
     const plan = generatePlan(inputData)
     console.log('=== Plan generated ===', plan)
+    latestPlan.value = plan
 
   // Format allocation data
-  const formattedAllocation = plan.allocation.map(item => ({
+  const displayAllocation = (plan.recommendedAllocation && plan.recommendedAllocation.length > 0)
+    ? plan.recommendedAllocation
+    : plan.allocation
+
+  const formattedAllocation = displayAllocation.map(item => ({
     ...item,
     amountFormatted: formatAmount(item.amount),
     interestFormatted: formatAmount(item.projectedInterest)
@@ -406,6 +436,45 @@ const savePlan = () => {
   showToast({ title: '已保存到我的规划', icon: 'success' })
 }
 
+const buildCurrentStateAllocation = () => {
+  const mergedByType = new Map()
+
+  const mergeDeposit = (deposit) => {
+    const normalizedType = normalizeDepositType(deposit.type)
+    const amount = parseFloat(deposit.amount) || 0
+
+    if (!normalizedType || amount <= 0) return
+
+    if (!mergedByType.has(normalizedType)) {
+      mergedByType.set(normalizedType, {
+        type: normalizedType,
+        amount: 0,
+        originalAmount: 0,
+        remainingBalance: 0,
+        interestRate: deposit.interestRate || 0,
+        rate: deposit.interestRate || 0,
+        status: 'active',
+        isInitial: true
+      })
+    }
+
+    const existing = mergedByType.get(normalizedType)
+    existing.amount += amount
+    existing.originalAmount += amount
+    existing.remainingBalance += amount
+  }
+
+  mergeDeposit({
+    type: '活期存款',
+    amount: demandDeposit.value,
+    interestRate: 0.1
+  })
+
+  existingPortfolio.value.forEach(mergeDeposit)
+
+  return Array.from(mergedByType.values())
+}
+
 // Send to execute
 const sendToExecute = () => {
   if (!showResult.value || !executionList.value.length) {
@@ -413,8 +482,9 @@ const sendToExecute = () => {
     return
   }
 
-  // Add initial flag to allocation items
-  const allocationWithFlags = allocation.value.map(item => ({
+  const currentStateAllocation = buildCurrentStateAllocation()
+  const fullTargetAllocation = (latestPlan.value?.allocation || allocation.value || [])
+  const targetAllocation = fullTargetAllocation.map(item => ({
     ...item,
     isInitial: true,
     remainingBalance: item.amount,
@@ -427,16 +497,29 @@ const sendToExecute = () => {
       amountFormatted: formatAmount(item.amount),
       projectedInterestFormatted: item.projectedInterest ? formatAmount(item.projectedInterest) : ''
     })),
-    allocation: allocationWithFlags,
+    allocation: currentStateAllocation,
+    currentStateAllocation,
+    targetAllocation,
+    recommendedAllocation: latestPlan.value?.recommendedAllocation || [],
     totalAllocated: allocation.value.reduce((sum, item) => sum + item.amount, 0),
+    totalCash: totalCashComputed.value,
+    existingTotal: existingPortfolioTotal.value,
+    netNewCash: netNewCash.value,
     planningHorizon: parseInt(planningHorizon.value),
     monthlyExpense: monthlyExpense.value,
+    housingExpense: housingExpense.value,
+    foodExpense: foodExpense.value,
+    otherExpense: otherExpense.value,
+    emergencyFund: emergencyFund.value,
     annualExpense: annualExpense.value,
+    existingPortfolio: existingPortfolio.value,
+    transitionPlan: latestPlan.value?.transitionPlan || [],
     planStartYear: new Date().getFullYear(),
     saveDate: new Date().toISOString()
   }
 
   storage.setSync('executionPlan', planData)
+  savedExecutionPlan.value = planData
 
   showToast({ title: '已送去执行', icon: 'success' })
 
@@ -458,6 +541,8 @@ onMounted(() => {
     calculateExpenses()
   }
 
+  savedExecutionPlan.value = storage.getSync('executionPlan')
+
   // Load existing portfolio from localStorage
   const savedPortfolio = storage.getSync('existingPortfolio')
   if (savedPortfolio && Array.isArray(savedPortfolio)) {
@@ -470,6 +555,204 @@ onMounted(() => {
 const saveExistingPortfolio = () => {
   storage.setSync('existingPortfolio', existingPortfolio.value)
 }
+
+const openCsvPicker = () => {
+  csvFileInput.value?.click()
+}
+
+const clearExistingPortfolio = () => {
+  existingPortfolio.value = []
+  saveExistingPortfolio()
+  showToast({ title: '已清空现有定期存款', icon: 'success', duration: 1500 })
+}
+
+const parseCsvRow = (line) => {
+  const values = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim())
+      current = ''
+    } else {
+      current += char
+    }
+  }
+
+  values.push(current.trim())
+  return values
+}
+
+const normalizeCsvHeader = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, '')
+
+const normalizeImportedDepositType = (value) => {
+  const normalized = normalizeDepositType(value)
+  const typeMap = {
+    '活期存款': '活期存款',
+    '一年': '1年定期',
+    '3个月定期': '3个月定期',
+    '3月定期': '3个月定期',
+    '三个月': '3个月定期',
+    '6个月定期': '6个月定期',
+    '6月定期': '6个月定期',
+    '六个月': '6个月定期',
+    '1年定期': '1年定期',
+    '二年': '2年定期',
+    '两年': '2年定期',
+    '2年定期': '2年定期',
+    '三年': '3年定期',
+    '3年定期': '3年定期',
+    '五年': '5年定期',
+    '5年定期': '5年定期'
+  }
+
+  return typeMap[normalized] || normalized
+}
+
+const getDepositTypeMonths = (type) => {
+  switch (normalizeImportedDepositType(type)) {
+    case '3个月定期':
+      return 3
+    case '6个月定期':
+      return 6
+    case '1年定期':
+      return 12
+    case '2年定期':
+      return 24
+    case '3年定期':
+      return 36
+    case '5年定期':
+      return 60
+    default:
+      return 0
+  }
+}
+
+const normalizeImportedDate = (value) => {
+  if (!value) return null
+  const cleaned = String(value)
+    .trim()
+    .replace(/[年/.]/g, '-')
+    .replace(/月/g, '-')
+    .replace(/日/g, '')
+  const parsed = new Date(cleaned)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+}
+
+const inferDepositDate = (maturityDate, type) => {
+  if (!maturityDate) return new Date().toISOString()
+  const months = getDepositTypeMonths(type)
+  if (!months) return new Date().toISOString()
+
+  const inferred = new Date(maturityDate)
+  inferred.setMonth(inferred.getMonth() - months)
+  return Number.isNaN(inferred.getTime()) ? new Date().toISOString() : inferred.toISOString()
+}
+
+const inferMaturityDate = (depositDate, type) => {
+  if (!depositDate) return null
+  const months = getDepositTypeMonths(type)
+  if (!months) return null
+
+  const inferred = new Date(depositDate)
+  inferred.setMonth(inferred.getMonth() + months)
+  return Number.isNaN(inferred.getTime()) ? null : inferred.toISOString()
+}
+
+const handleCsvUpload = async (event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+
+  try {
+    const text = await file.text()
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    if (lines.length < 2) {
+      showToast({ title: 'CSV内容为空', icon: 'none' })
+      return
+    }
+
+    const firstRow = parseCsvRow(lines[0])
+    const headers = firstRow.map(normalizeCsvHeader)
+    const findHeaderIndex = (aliases) => headers.findIndex(header => aliases.includes(header))
+    const looksLikeHeaderRow = headers.some(header =>
+      ['type', 'deposittype', '存款类型', 'amount', 'balance', '金额', '本金', 'maturitydate', '到期日期', '到期日'].includes(header)
+    )
+
+    let typeIndex = 0
+    let amountIndex = 1
+    let maturityDateIndex = 2
+    let rateIndex = 3
+    let depositDateIndex = -1
+    let dataLines = lines
+
+    if (looksLikeHeaderRow) {
+      typeIndex = findHeaderIndex(['type', 'deposittype', '存款类型'])
+      amountIndex = findHeaderIndex(['amount', 'balance', '金额', '本金'])
+      rateIndex = findHeaderIndex(['interestrate', 'rate', '利率', '年利率'])
+      depositDateIndex = findHeaderIndex(['depositdate', 'startdate', '存入日期', '起息日'])
+      maturityDateIndex = findHeaderIndex(['maturitydate', 'enddate', '到期日期', '到期日'])
+      dataLines = lines.slice(1)
+    }
+
+    if (typeIndex === -1 || amountIndex === -1 || maturityDateIndex === -1) {
+      showToast({ title: 'CSV缺少必要列', icon: 'none' })
+      return
+    }
+
+    const imported = dataLines.map((line, index) => {
+      const cells = parseCsvRow(line)
+      const amount = parseFloat(String(cells[amountIndex] || '').replace(/,/g, ''))
+      const type = normalizeImportedDepositType(cells[typeIndex] || '')
+      const headerlessDate = normalizeImportedDate(cells[2] || '')
+      const maturityDate = looksLikeHeaderRow
+        ? normalizeImportedDate(cells[maturityDateIndex])
+        : inferMaturityDate(headerlessDate, type)
+      const depositDate = looksLikeHeaderRow
+        ? (depositDateIndex >= 0
+          ? (normalizeImportedDate(cells[depositDateIndex]) || inferDepositDate(maturityDate, type))
+          : inferDepositDate(maturityDate, type))
+        : (headerlessDate || new Date().toISOString())
+      const interestRate = parseFloat(String(cells[rateIndex] || '').replace('%', '')) || 0
+
+      if (!type || !amount || amount <= 0) return null
+      if (type !== '活期存款' && !maturityDate) return null
+
+      return {
+        id: `${Date.now()}-${index}`,
+        type,
+        amount,
+        interestRate,
+        depositDate,
+        maturityDate: type === '活期存款' ? null : maturityDate,
+        status: 'active',
+        isExisting: true
+      }
+    }).filter(Boolean)
+
+    if (!imported.length) {
+      showToast({ title: '没有可导入的有效存款记录', icon: 'none' })
+      return
+    }
+
+    existingPortfolio.value = imported
+    saveExistingPortfolio()
+    showExistingPortfolio.value = true
+    showToast({ title: `已导入${imported.length}笔存款`, icon: 'success', duration: 1800 })
+  } catch (error) {
+    showToast({ title: `CSV导入失败: ${error.message}`, icon: 'none', duration: 3000 })
+  } finally {
+    event.target.value = ''
+  }
+}
 </script>
 
 <template>
@@ -478,6 +761,9 @@ const saveExistingPortfolio = () => {
     <div class="page-header">
       <h1 class="page-title">存款规划</h1>
       <p class="page-subtitle">智能分配存款，确保每个季度初资金准时到位</p>
+      <div style="margin-top: 8px; font-size: 12px; line-height: 1.4; color: #7a7a7a; word-break: break-all;">
+        调试：{{ debugStatusLine }}
+      </div>
     </div>
 
     <!-- Stats Cards -->
@@ -523,7 +809,7 @@ const saveExistingPortfolio = () => {
                   class="input-field"
                   placeholder="当前现金/活期账户余额"
                   :value="demandDeposit"
-                  @input="(e) => { demandDeposit = e.target.value }"
+                  @input="onTotalCashInput"
                   @blur="(e) => { demandDeposit = e.target.value }"
                 />
               </div>
@@ -564,7 +850,12 @@ const saveExistingPortfolio = () => {
             <div class="capital-card total">
               <div class="capital-card-label">💰 资金总额</div>
               <div class="capital-card-value highlight">¥{{ formatAmount(totalCashComputed) }}</div>
-              <div class="capital-card-hint">活期+定期</div>
+              <div class="capital-card-hint">活期+定期（含现有）</div>
+            </div>
+            <div class="capital-card net-new">
+              <div class="capital-card-label">📋 可分配资金</div>
+              <div class="capital-card-value">¥{{ formatAmount(netNewCash) }}</div>
+              <div class="capital-card-hint">活期-应急金（可用于新建计划）</div>
             </div>
           </div>
 
@@ -641,9 +932,22 @@ const saveExistingPortfolio = () => {
               <span v-if="!showExistingPortfolio && existingPortfolio.filter(d => d.type !== '活期存款').length > 0" class="section-summary">
                 {{ existingPortfolio.filter(d => d.type !== '活期存款').length }}笔, ¥{{ formatAmount(existingPortfolioTotal) }}
               </span>
+              <button class="btn-toggle secondary" @click="openCsvPicker">
+                导入CSV
+              </button>
+              <button class="btn-toggle secondary" @click="clearExistingPortfolio">
+                清空
+              </button>
               <button class="btn-toggle" @click="toggleExistingPortfolio">
                 {{ showExistingPortfolio ? '收起' : '展开' }}
               </button>
+              <input
+                ref="csvFileInput"
+                type="file"
+                accept=".csv,text/csv"
+                style="display: none"
+                @change="handleCsvUpload"
+              />
             </div>
           </div>
 
@@ -839,7 +1143,7 @@ const saveExistingPortfolio = () => {
           <div class="allocation-grid">
             <div v-for="item in allocation" :key="item.type" class="allocation-card">
               <div class="allocation-card-header">
-                <span :class="['allocation-type-badge', item.type === '活期存款' ? 'type-current' : item.type === '3 年定期' ? 'type-long' : 'type-short']">
+                <span :class="['allocation-type-badge', item.type === '活期存款' ? 'type-current' : item.type.includes('年') ? 'type-long' : 'type-short']">
                   {{ item.type }}
                 </span>
                 <span class="allocation-card-amount">¥{{ item.amountFormatted }}</span>
@@ -1362,7 +1666,9 @@ const saveExistingPortfolio = () => {
 
 /* Capital Summary Cards */
 .capital-summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
   gap: 12px;
   margin-top: 20px;
   padding: 16px;
@@ -1372,7 +1678,6 @@ const saveExistingPortfolio = () => {
 }
 
 .capital-card {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1383,15 +1688,35 @@ const saveExistingPortfolio = () => {
   transition: all 0.2s;
 }
 
-.capital-card:hover {
-  border-color: var(--primary-color);
-  box-shadow: 0 2px 8px rgba(7, 193, 96, 0.1);
-}
-
 .capital-card.total {
+  grid-column: 1 / -1;
   background: linear-gradient(135deg, #07C160 0%, #06ad56 100%);
   border-color: #07C160;
   color: white;
+}
+
+.capital-card.net-new {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: #667eea;
+  color: white;
+}
+
+.capital-card.net-new .capital-card-label {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.capital-card.net-new .capital-card-value {
+  color: white;
+}
+
+.capital-card.net-new .capital-card-hint {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.capital-card:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(7, 193, 96, 0.1);
 }
 
 .capital-card-label {
@@ -1549,10 +1874,17 @@ const saveExistingPortfolio = () => {
   color: white;
 }
 
+.btn-toggle.secondary:hover {
+  background: #eef7f0;
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
 .section-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .section-summary {
